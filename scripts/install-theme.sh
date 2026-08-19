@@ -12,7 +12,7 @@ if ! grep -q '/hamvpn/hamvpn-theme.css' "$index"; then
 fi
 
 sed -i 's#<title>Remnawave</title>#<title>HAMVPN · Remnawave</title>#' "$index"
-sed -i 's#content="#161B23"#content="#10071c"#' "$index"
+sed -i 's|content="#161B23"|content="#10071c"|' "$index"
 sed -i 's#content="Remnawave"#content="HAMVPN"#' "$index"
 
 if ! grep -q 'hamvpn-source-link' "$index"; then
