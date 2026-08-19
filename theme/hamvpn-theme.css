@@ -58,6 +58,14 @@ body::after {
     background: transparent !important;
 }
 
+img[alt="logo"] {
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+    content: url("/hamvpn/hamvpn-mascot.png");
+    object-fit: contain;
+    filter: drop-shadow(0 0.35rem 0.8rem rgba(106, 42, 181, 0.28));
+}
+
 main {
     background-color: transparent !important;
 }
