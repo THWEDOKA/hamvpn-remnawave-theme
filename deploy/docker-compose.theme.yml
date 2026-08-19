@@ -1,0 +1,3 @@
+services:
+  remnawave:
+    image: hamvpn/remnawave:2-theme

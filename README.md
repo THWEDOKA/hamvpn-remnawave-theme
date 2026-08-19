@@ -13,7 +13,9 @@
 ## Сборка
 
 ```bash
-docker build --pull=false -t hamvpn/remnawave:2-theme .
+docker build --pull=false \
+  --build-arg VCS_REF="$(git rev-parse HEAD)" \
+  -t hamvpn/remnawave:2-theme .
 ```
 
 Базовый образ закреплён по digest, поэтому сборка воспроизводима и не получает обновления Remnawave неожиданно.
@@ -26,6 +28,8 @@ docker run --rm --entrypoint sh hamvpn/remnawave:2-theme -lc \
    grep -q /hamvpn/hamvpn-theme.css /opt/app/frontend/index.html && \
    grep -q hamvpn-source-link /opt/app/frontend/index.html"
 ```
+
+Production запускается с дополнительным Compose-файлом `deploy/docker-compose.theme.yml`. Исходный Compose Remnawave при этом остаётся неизменным.
 
 ## Обновление Remnawave
 
