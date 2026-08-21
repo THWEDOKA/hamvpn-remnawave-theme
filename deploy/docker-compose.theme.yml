@@ -1,3 +1,45 @@
 services:
   remnawave:
     image: hamvpn/remnawave:2-theme
+
+  hamvpn-infrastructure:
+    image: hamvpn/remnawave-infrastructure:1
+    restart: unless-stopped
+    depends_on:
+      remnawave:
+        condition: service_healthy
+    environment:
+      REMNAWAVE_BASE_URL: https://goszapravki.com
+      TRUSTED_ORIGIN: https://goszapravki.com
+      INFRA_DATA_DIR: /data
+      PANEL_PUBLIC_IP: ${PANEL_PUBLIC_IP:?Set PANEL_PUBLIC_IP in /opt/remnawave/.env}
+      INFRA_NODE_IMAGE: ${INFRA_NODE_IMAGE:-remnawave/node:latest}
+      PLAN_TTL_SECONDS: "900"
+      CONNECT_TIMEOUT_SECONDS: "6"
+    ports:
+      - 127.0.0.1:8090:8090
+    volumes:
+      - /opt/hamvpn-infrastructure:/data
+    networks:
+      - remnawave-network
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/ham-infrastructure/healthz', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  remnawave-network:
+    external: false

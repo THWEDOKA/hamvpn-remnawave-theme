@@ -6,6 +6,7 @@ index=/opt/app/frontend/index.html
 test -f "$index"
 test -f /opt/app/frontend/hamvpn/hamvpn-theme.css
 test -f /opt/app/frontend/hamvpn/hamvpn-mascot.png
+test -f /opt/app/frontend/hamvpn/hamvpn-infrastructure-nav.js
 
 if ! grep -q '/hamvpn/hamvpn-theme.css' "$index"; then
     sed -i 's#</head>#        <link rel="stylesheet" href="/hamvpn/hamvpn-theme.css" />\n    </head>#' "$index"
@@ -19,5 +20,10 @@ if ! grep -q 'hamvpn-source-link' "$index"; then
     sed -i 's#</body>#        <a class="hamvpn-source-link" href="https://github.com/THWEDOKA/hamvpn-remnawave-theme" target="_blank" rel="noopener noreferrer">Исходный код темы</a>\n    </body>#' "$index"
 fi
 
+if ! grep -q '/hamvpn/hamvpn-infrastructure-nav.js' "$index"; then
+    sed -i 's#</body>#        <script src="/hamvpn/hamvpn-infrastructure-nav.js" defer></script>\n    </body>#' "$index"
+fi
+
 grep -q '/hamvpn/hamvpn-theme.css' "$index"
 grep -q 'hamvpn-source-link' "$index"
+grep -q '/hamvpn/hamvpn-infrastructure-nav.js' "$index"

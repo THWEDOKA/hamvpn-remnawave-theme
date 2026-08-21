@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0c0712">
+    <title>HAMVPN · Инфраструктура</title>
+    <link rel="stylesheet" href="/ham-infrastructure/app.css">
+</head>
+<body>
+    <div class="shell">
+        <aside class="sidebar">
+            <a class="brand" href="/dashboard">
+                <img src="/hamvpn/hamvpn-mascot.png" alt="HAMVPN">
+                <span><strong>HAMVPN</strong><small>infrastructure</small></span>
+            </a>
+            <nav class="nav" aria-label="Разделы инфраструктуры">
+                <button class="nav-item active" data-view="overview"><span>⌁</span>Обзор</button>
+                <button class="nav-item" data-view="node-add"><span>＋</span>Добавить ноду</button>
+                <button class="nav-item" data-view="ip-change"><span>⇄</span>Смена IP</button>
+                <button class="nav-item" data-view="history"><span>◷</span>Журнал операций</button>
+            </nav>
+            <div class="sidebar-foot">
+                <div class="version-lock"><i></i><span>Remnawave 2.8.1<br><small>версия зафиксирована</small></span></div>
+                <a class="back-link" href="/dashboard">← Вернуться в панель</a>
+            </div>
+        </aside>
+
+        <main>
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">HAMVPN CONTROL PLANE</p>
+                    <h1 id="page-title">Инфраструктура</h1>
+                </div>
+                <div class="top-actions">
+                    <span class="secure-badge">● защищённый контур</span>
+                    <button class="icon-button" id="refresh" aria-label="Обновить данные">↻</button>
+                </div>
+            </header>
+
+            <section class="view active" id="view-overview">
+                <div class="hero">
+                    <div>
+                        <p class="eyebrow">ЕДИНАЯ ТОЧКА УПРАВЛЕНИЯ</p>
+                        <h2>Ноды, хосты и связи —<br><em>без ручной рутины.</em></h2>
+                        <p>Каждое изменение проходит проверку, снимок, применение и контроль результата. При ошибке конфигурация откатывается автоматически.</p>
+                    </div>
+                    <div class="pipeline" aria-label="Этапы безопасной операции">
+                        <span>01 Проверка</span><b>→</b><span>02 Снимок</span><b>→</b><span>03 Применение</span><b>→</b><span>04 Контроль</span>
+                    </div>
+                </div>
+                <div class="metrics" id="metrics">
+                    <article><span>Ноды</span><strong>—</strong><small>загрузка данных</small></article>
+                    <article><span>На связи</span><strong>—</strong><small>загрузка данных</small></article>
+                    <article><span>Хосты</span><strong>—</strong><small>загрузка данных</small></article>
+                    <article><span>Профили / сквады</span><strong>—</strong><small>загрузка данных</small></article>
+                </div>
+                <div class="grid two">
+                    <article class="panel">
+                        <div class="panel-head"><div><p class="eyebrow">СОСТОЯНИЕ</p><h3>Ноды</h3></div><button class="text-button" data-go="node-add">Добавить ноду →</button></div>
+                        <div class="node-list" id="node-list"><div class="empty">Получаем актуальные данные…</div></div>
+                    </article>
+                    <article class="panel risk-panel">
+                        <div class="panel-head"><div><p class="eyebrow">БЕЗОПАСНАЯ ЗАМЕНА</p><h3>Смена IP</h3></div><span class="status-chip">с откатом</span></div>
+                        <div class="risk-copy">
+                            <div class="orbit">⇄</div>
+                            <h4>Одна операция вместо цепочки правок</h4>
+                            <p>Модуль найдёт ноду, связанные хосты и точные вхождения IP в профилях. До применения вы увидите полный план воздействия.</p>
+                            <button class="primary" data-go="ip-change">Сформировать план</button>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="view" id="view-node-add">
+                <div class="section-intro"><div><p class="eyebrow">БЫСТРОЕ ДОБАВЛЕНИЕ</p><h2>Новая нода за один <em>проверяемый</em> сценарий</h2></div><p>Новый сервер не затрагивает работающие ноды. Уже установленный Remnawave Node автоматически не перезаписывается.</p></div>
+                <div class="stepper"><span class="current" data-step="1">1 · Сервер</span><span data-step="2">2 · Нода</span><span data-step="3">3 · Хост и сквады</span><span data-step="4">4 · Проверка</span></div>
+                <form id="node-form" autocomplete="off">
+                    <article class="panel form-step active" data-form-step="1">
+                        <div class="panel-head"><div><p class="eyebrow">ШАГ 01</p><h3>SSH-доступ к новому серверу</h3></div><span class="status-chip">не сохраняется</span></div>
+                        <div class="form-grid three">
+                            <label><span>IP или домен</span><input name="sshHost" required placeholder="203.0.113.10"></label>
+                            <label><span>SSH-порт</span><input name="sshPort" type="number" value="22" min="1" max="65535" required></label>
+                            <label><span>Пользователь</span><input name="sshUser" value="root" required></label>
+                        </div>
+                        <div class="form-grid two">
+                            <label><span>Пароль</span><input name="sshPassword" type="password" placeholder="Не сохраняется"></label>
+                            <label><span>Приватный ключ</span><textarea name="sshPrivateKey" rows="3" placeholder="Или вставьте ключ вместо пароля"></textarea></label>
+                        </div>
+                        <div class="inline-result hidden" id="ssh-result"></div>
+                        <div class="form-actions"><span></span><button type="button" class="primary" id="ssh-check">Проверить сервер</button></div>
+                    </article>
+
+                    <article class="panel form-step" data-form-step="2">
+                        <div class="panel-head"><div><p class="eyebrow">ШАГ 02</p><h3>Параметры ноды</h3></div><span class="status-chip">Remnawave 2.8.1</span></div>
+                        <div class="form-grid three">
+                            <label><span>Внутреннее имя</span><input name="nodeName" minlength="3" maxlength="30" required placeholder="Germany-5"></label>
+                            <label><span>Адрес ноды</span><input name="nodeAddress" required placeholder="203.0.113.10"></label>
+                            <label><span>Node Port</span><input name="nodePort" type="number" value="2222" min="1" max="65535" required></label>
+                            <label><span>Страна ISO</span><input name="countryCode" value="DE" minlength="2" maxlength="2" required></label>
+                            <label class="span-two"><span>Профиль конфигурации</span><select name="profileUuid" id="profile-select" required><option value="">Выберите профиль</option></select></label>
+                        </div>
+                        <fieldset><legend>Активные inbound</legend><div class="choice-grid" id="inbound-choices"><span class="muted">Сначала выберите профиль</span></div></fieldset>
+                        <div class="form-actions"><button type="button" class="secondary" data-prev="1">Назад</button><button type="button" class="primary" data-next="3">Продолжить</button></div>
+                    </article>
+
+                    <article class="panel form-step" data-form-step="3">
+                        <div class="panel-head"><div><p class="eyebrow">ШАГ 03</p><h3>Хост и доступ сквадов</h3></div><label class="switch"><input type="checkbox" name="hostEnabled" checked><span></span>Создать хост</label></div>
+                        <div class="form-grid three">
+                            <label><span>Название хоста</span><input name="hostRemark" maxlength="40" placeholder="🇩🇪 Германия — 5"></label>
+                            <label><span>Адрес для клиентов</span><input name="hostAddress" placeholder="IP или домен ноды"></label>
+                            <label><span>Порт</span><input name="hostPort" type="number" value="443" min="1" max="65535"></label>
+                            <label><span>SNI</span><input name="hostSni" placeholder="необязательно"></label>
+                            <label><span>Fingerprint</span><input name="hostFingerprint" placeholder="firefox"></label>
+                            <label><span>Inbound хоста</span><select name="hostInboundUuid" id="host-inbound-select"><option value="">Выберите inbound</option></select></label>
+                        </div>
+                        <fieldset><legend>Кому показывать хост</legend><div class="choice-grid" id="squad-choices"><span class="muted">Получаем сквады…</span></div></fieldset>
+                        <div class="notice amber"><b>Важно</b><span>Выбранные сквады получат хост. Все остальные будут явно исключены — так хосты не перемешаются.</span></div>
+                        <div class="form-actions"><button type="button" class="secondary" data-prev="2">Назад</button><button type="button" class="primary" id="node-plan">Проверить план</button></div>
+                    </article>
+
+                    <article class="panel form-step" data-form-step="4">
+                        <div class="panel-head"><div><p class="eyebrow">ШАГ 04</p><h3>План изменений</h3></div><span class="status-chip warning">ожидает подтверждения</span></div>
+                        <div id="node-plan-result" class="plan-box"></div>
+                        <label class="confirm-field"><span>Введите точное имя ноды для запуска</span><input name="nodeConfirmation" autocomplete="off"></label>
+                        <div class="form-actions"><button type="button" class="secondary" data-prev="3">Назад</button><button type="button" class="danger" id="node-apply">Установить и добавить</button></div>
+                    </article>
+                </form>
+            </section>
+
+            <section class="view" id="view-ip-change">
+                <div class="section-intro"><div><p class="eyebrow">СМЕНЩИК IP</p><h2>Сначала зависимости.<br><em>Только потом изменение.</em></h2></div><p>Автоматически меняются только точные и проверяемые совпадения. Доменные записи и составные строки останутся предупреждениями.</p></div>
+                <div class="grid switch-layout">
+                    <article class="panel">
+                        <div class="panel-head"><div><p class="eyebrow">ИСХОДНЫЕ ДАННЫЕ</p><h3>Выберите ноду</h3></div><span class="status-chip">dry run</span></div>
+                        <form id="ip-form">
+                            <label><span>Нода</span><select name="nodeUuid" id="ip-node-select" required><option value="">Выберите ноду</option></select></label>
+                            <label><span>Новый IP</span><input name="newAddress" required placeholder="203.0.113.20"></label>
+                            <button class="primary full" type="submit">Найти все зависимости</button>
+                        </form>
+                        <div class="notice"><b>Ничего не меняется на этом шаге</b><span>План хранится 15 минут и привязан к вашей текущей сессии.</span></div>
+                    </article>
+                    <article class="panel dependency-panel">
+                        <div class="panel-head"><div><p class="eyebrow">КАРТА ВОЗДЕЙСТВИЯ</p><h3>План операции</h3></div><span class="status-chip" id="ip-plan-status">не сформирован</span></div>
+                        <div id="ip-plan-result" class="empty tall">Выберите ноду и укажите новый IP. Здесь появятся связанные хосты, профили и предупреждения.</div>
+                        <div id="ip-confirm-wrap" class="hidden">
+                            <label class="confirm-field"><span>Введите точное имя ноды</span><input id="ip-confirmation" autocomplete="off"></label>
+                            <button class="danger full" id="ip-apply">Применить с автоматическим откатом</button>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section class="view" id="view-history">
+                <div class="section-intro"><div><p class="eyebrow">АУДИТ</p><h2>Каждое действие <em>оставляет след.</em></h2></div><p>Журнал не содержит SSH-пароли, приватные ключи или токены панели.</p></div>
+                <article class="panel">
+                    <div class="panel-head"><div><p class="eyebrow">ПОСЛЕДНИЕ ОПЕРАЦИИ</p><h3>Журнал</h3></div><button class="text-button" id="history-refresh">Обновить ↻</button></div>
+                    <div class="history-list" id="history-list"><div class="empty">Получаем журнал…</div></div>
+                </article>
+            </section>
+        </main>
+    </div>
+    <div class="toast-stack" id="toasts" aria-live="polite"></div>
+    <script src="/ham-infrastructure/app.js" defer></script>
+</body>
+</html>
+

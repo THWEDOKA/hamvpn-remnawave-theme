@@ -8,6 +8,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
 LABEL org.opencontainers.image.revision="$VCS_REF"
 
 COPY public/hamvpn-mascot.png /opt/app/frontend/hamvpn/hamvpn-mascot.png
+COPY public/hamvpn-infrastructure-nav.js /opt/app/frontend/hamvpn/hamvpn-infrastructure-nav.js
 COPY theme/hamvpn-theme.css /opt/app/frontend/hamvpn/hamvpn-theme.css
 COPY scripts/install-theme.sh /usr/local/bin/install-hamvpn-theme
 
