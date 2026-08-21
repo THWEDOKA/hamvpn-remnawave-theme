@@ -1,0 +1,1177 @@
+diff --git a/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts b/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
+index 8098cc7..26bc472 100644
+--- a/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
++++ b/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
+@@ -23,6 +23,7 @@ import {
+     TbRadar2,
+     TbReportAnalytics,
+     TbRoute,
++    TbServerCog,
+     TbStar,
+     TbTools,
+     TbWebhook
+@@ -90,6 +91,12 @@ export const useDesktopMenuSections = (): MenuItem[] => {
+                     icon: HiServer,
+                     id: 'nodes-management'
+                 },
++                {
++                    name: 'Инфраструктура',
++                    href: ROUTES.DASHBOARD.MANAGEMENT.INFRASTRUCTURE,
++                    icon: TbServerCog,
++                    id: 'infrastructure'
++                },
+                 {
+                     name: `${t('constants.node-plugins')} β`,
+                     href: ROUTES.DASHBOARD.MANAGEMENT.NODE_PLUGINS.ROOT,
+diff --git a/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts b/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
+index 7e74941..214bfbd 100644
+--- a/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
++++ b/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
+@@ -24,6 +24,7 @@ import {
+     TbRadar2,
+     TbReportAnalytics,
+     TbRoute,
++    TbServerCog,
+     TbWebhook
+ } from 'react-icons/tb'
+ 
+@@ -98,6 +99,12 @@ export const useMobileMenuSections = (): MenuItem[] => {
+                             icon: HiServer,
+                             id: 'management'
+                         },
++                        {
++                            name: 'Инфраструктура',
++                            href: ROUTES.DASHBOARD.MANAGEMENT.INFRASTRUCTURE,
++                            icon: TbServerCog,
++                            id: 'infrastructure'
++                        },
+                         {
+                             name: `${t('constants.node-plugins')} β`,
+                             href: ROUTES.DASHBOARD.MANAGEMENT.NODE_PLUGINS.ROOT,
+diff --git a/src/app/router/router.tsx b/src/app/router/router.tsx
+index fed8476..339f16a 100644
+--- a/src/app/router/router.tsx
++++ b/src/app/router/router.tsx
+@@ -7,6 +7,7 @@ import { ExternalSquadsPageConnector } from '@pages/dashboard/external-squads/co
+ import { HomePageConnector } from '@pages/dashboard/home/connectors'
+ import { HostsPageConnector } from '@pages/dashboard/hosts/ui/connectors'
+ import { HwidInspectorPageConnector } from '@pages/dashboard/hwid-inspector/ui/connectors'
++import { InfrastructurePage } from '@pages/dashboard/infrastructure/infrastructure.page'
+ import { InternalSquadsPageConnector } from '@pages/dashboard/internal-squads/connectors/internal-squads.page.connector'
+ import { NodePluginEditorPageConnector } from '@pages/dashboard/node-plugins/ui/connectors/node-plugin-editor-page.connector'
+ import { NodePluginsBasePageConnector } from '@pages/dashboard/node-plugins/ui/connectors/node-plugins-base-page.connector'
+@@ -76,6 +77,10 @@ const router = createBrowserRouter(
+                             element={<NodesPageConnector />}
+                             path={ROUTES.DASHBOARD.MANAGEMENT.NODES}
+                         />
++                        <Route
++                            element={<InfrastructurePage />}
++                            path={ROUTES.DASHBOARD.MANAGEMENT.INFRASTRUCTURE}
++                        />
+ 
+                         <Route
+                             element={<NodesBandwidthTablePageConnector />}
+diff --git a/src/pages/dashboard/infrastructure/infrastructure.page.tsx b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
+new file mode 100644
+index 0000000..3ba3475
+--- /dev/null
++++ b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
+@@ -0,0 +1,1086 @@
++import {
++    Alert,
++    Badge,
++    Button,
++    Card,
++    Code,
++    Divider,
++    Grid,
++    Group,
++    MultiSelect,
++    NumberInput,
++    Paper,
++    PasswordInput,
++    ScrollArea,
++    Select,
++    SimpleGrid,
++    Stack,
++    Switch,
++    Table,
++    Tabs,
++    Text,
++    Textarea,
++    TextInput,
++    ThemeIcon,
++    Title
++} from '@mantine/core'
++import { notifications } from '@mantine/notifications'
++import { useEffect, useMemo, useState } from 'react'
++import {
++    TbActivityHeartbeat,
++    TbAlertTriangle,
++    TbArrowsExchange,
++    TbCheck,
++    TbHistory,
++    TbPlus,
++    TbRefresh,
++    TbServerCog,
++    TbShieldCheck,
++    TbTopologyStar3
++} from 'react-icons/tb'
++
++import { instance } from '@shared/api'
++import { LoadingScreen, Page, PageHeaderShared } from '@shared/ui'
++
++type Summary = {
++    connectedNodes: number
++    hosts: number
++    nodes: number
++    profiles: number
++    squads: number
++}
++
++type NodeItem = {
++    address: string
++    countryCode?: string
++    isConnected: boolean
++    isDisabled: boolean
++    name: string
++    port: number
++    profileName?: string
++    uuid: string
++}
++
++type InboundItem = { tag?: string; type?: string; uuid: string }
++type ProfileItem = { inbounds: InboundItem[]; name: string; uuid: string }
++type SquadItem = { name: string; uuid: string }
++
++type Inventory = {
++    hosts: unknown[]
++    nodes: NodeItem[]
++    profiles: ProfileItem[]
++    squads: SquadItem[]
++    summary: Summary
++}
++
++type Operation = {
++    createdAt: string
++    id: string
++    impact: Record<string, number>
++    resource: string
++    state: string
++    type: string
++    updatedAt: string
++}
++
++type SshCheck = {
++    architecture: string
++    distribution: string
++    docker: string
++    existingNode: boolean
++    fingerprint: string
++}
++
++type IpPlan = {
++    hosts: { newAddress?: string; oldAddress: string; remark: string; willChange: boolean }[]
++    impact: { hosts: number; nodes: number; profileValues: number }
++    node: { name: string; newAddress: string; oldAddress: string; port: number }
++    operationId: string
++    profiles: { matches: number; name: string }[]
++    warnings: string[]
++}
++
++type NodePlan = {
++    host: {
++        address: string
++        enabled: boolean
++        excludedSquadUuids: string[]
++        port: number
++        remark: string
++        squadUuids: string[]
++    }
++    node: {
++        address: string
++        inboundUuids: string[]
++        name: string
++        port: number
++        profileName: string
++    }
++    operationId: string
++}
++
++type SshForm = {
++    host: string
++    password: string
++    port: number
++    privateKey: string
++    username: string
++}
++
++type NodeForm = {
++    address: string
++    countryCode: string
++    inboundUuids: string[]
++    name: string
++    port: number
++    profileUuid: string
++}
++
++type HostForm = {
++    address: string
++    enabled: boolean
++    fingerprint: string
++    inboundUuid: string
++    port: number
++    remark: string
++    sni: string
++    squadUuids: string[]
++}
++
++const API_BASE = '/ham-infrastructure/api'
++
++const api = async <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
++    const response = await instance.request<T>({ method, url: `${API_BASE}${path}`, data: body })
++    return response.data
++}
++
++const errorMessage = (error: unknown): string => {
++    if (typeof error === 'object' && error && 'response' in error) {
++        const response = (error as { response?: { data?: { detail?: string } } }).response
++        if (response?.data?.detail) return response.data.detail
++    }
++    return error instanceof Error ? error.message : 'Неизвестная ошибка'
++}
++
++const stateColor = (state: string): string => {
++    if (state === 'completed') return 'teal'
++    if (state === 'planned') return 'blue'
++    if (state === 'applying') return 'yellow'
++    return 'red'
++}
++
++const stateLabel = (state: string): string => {
++    const labels: Record<string, string> = {
++        applying: 'Выполняется',
++        completed: 'Завершено',
++        planned: 'План готов',
++        rollback_failed: 'Откат неполный',
++        rolled_back: 'Отменено и откачено'
++    }
++    return labels[state] ?? state
++}
++
++function MetricCard({ color, label, value }: { color: string; label: string; value: number }) {
++    return (
++        <Card padding="lg" radius="md" withBorder>
++            <Group justify="space-between">
++                <Stack gap={2}>
++                    <Text c="dimmed" fw={600} size="xs" tt="uppercase">
++                        {label}
++                    </Text>
++                    <Title order={2}>{value}</Title>
++                </Stack>
++                <ThemeIcon color={color} radius="md" size="xl" variant="light">
++                    <TbActivityHeartbeat size={24} />
++                </ThemeIcon>
++            </Group>
++        </Card>
++    )
++}
++
++function InventoryView({ inventory, onRefresh }: { inventory: Inventory; onRefresh: () => void }) {
++    return (
++        <Stack gap="lg">
++            <SimpleGrid cols={{ base: 1, sm: 2, xl: 5 }} spacing="md">
++                <MetricCard color="blue" label="Ноды" value={inventory.summary.nodes} />
++                <MetricCard
++                    color="teal"
++                    label="На связи"
++                    value={inventory.summary.connectedNodes}
++                />
++                <MetricCard color="violet" label="Хосты" value={inventory.summary.hosts} />
++                <MetricCard color="grape" label="Профили" value={inventory.summary.profiles} />
++                <MetricCard color="cyan" label="Сквады" value={inventory.summary.squads} />
++            </SimpleGrid>
++
++            <Paper p="lg" radius="md" withBorder>
++                <Group justify="space-between" mb="md">
++                    <Stack gap={2}>
++                        <Title order={4}>Состояние нод</Title>
++                        <Text c="dimmed" size="sm">
++                            Актуальные адреса, профили и состояние соединения
++                        </Text>
++                    </Stack>
++                    <Button
++                        leftSection={<TbRefresh size={16} />}
++                        onClick={onRefresh}
++                        variant="light"
++                    >
++                        Обновить
++                    </Button>
++                </Group>
++                <ScrollArea>
++                    <Table highlightOnHover miw={760} verticalSpacing="sm">
++                        <Table.Thead>
++                            <Table.Tr>
++                                <Table.Th>Нода</Table.Th>
++                                <Table.Th>Адрес</Table.Th>
++                                <Table.Th>Профиль</Table.Th>
++                                <Table.Th>Состояние</Table.Th>
++                            </Table.Tr>
++                        </Table.Thead>
++                        <Table.Tbody>
++                            {inventory.nodes.map((node) => (
++                                <Table.Tr key={node.uuid}>
++                                    <Table.Td>
++                                        <Text fw={600} size="sm">
++                                            {node.countryCode || 'XX'} · {node.name}
++                                        </Text>
++                                    </Table.Td>
++                                    <Table.Td>
++                                        <Code>
++                                            {node.address}:{node.port}
++                                        </Code>
++                                    </Table.Td>
++                                    <Table.Td>{node.profileName || 'Не назначен'}</Table.Td>
++                                    <Table.Td>
++                                        <Badge
++                                            color={
++                                                node.isConnected && !node.isDisabled
++                                                    ? 'teal'
++                                                    : 'red'
++                                            }
++                                            variant="light"
++                                        >
++                                            {node.isDisabled
++                                                ? 'Отключена'
++                                                : node.isConnected
++                                                  ? 'На связи'
++                                                  : 'Нет связи'}
++                                        </Badge>
++                                    </Table.Td>
++                                </Table.Tr>
++                            ))}
++                        </Table.Tbody>
++                    </Table>
++                </ScrollArea>
++            </Paper>
++        </Stack>
++    )
++}
++
++function IpChangeView({ inventory, onComplete }: { inventory: Inventory; onComplete: () => void }) {
++    const [nodeUuid, setNodeUuid] = useState<string | null>(null)
++    const [newAddress, setNewAddress] = useState('')
++    const [confirmation, setConfirmation] = useState('')
++    const [plan, setPlan] = useState<IpPlan | null>(null)
++    const [busy, setBusy] = useState(false)
++
++    const createPlan = async () => {
++        if (!nodeUuid || !newAddress.trim()) return
++        setBusy(true)
++        try {
++            const result = await api<IpPlan>('/ip-change/plan', 'POST', {
++                nodeUuid,
++                newAddress: newAddress.trim()
++            })
++            setPlan(result)
++            setConfirmation('')
++            notifications.show({ color: 'blue', message: 'План зависимостей сформирован' })
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setBusy(false)
++        }
++    }
++
++    const apply = async () => {
++        if (!plan) return
++        setBusy(true)
++        try {
++            const result = await api<{ newAddress: string; warning?: string }>(
++                '/ip-change/apply',
++                'POST',
++                { operationId: plan.operationId, confirmation }
++            )
++            notifications.show({
++                color: 'teal',
++                message: result.warning || `IP изменён и проверен: ${result.newAddress}`
++            })
++            setPlan(null)
++            setNodeUuid(null)
++            setNewAddress('')
++            setConfirmation('')
++            onComplete()
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setBusy(false)
++        }
++    }
++
++    return (
++        <Grid gap="lg">
++            <Grid.Col span={{ base: 12, lg: 5 }}>
++                <Paper p="lg" radius="md" withBorder>
++                    <Stack>
++                        <Title order={4}>Смена IP ноды</Title>
++                        <Text c="dimmed" size="sm">
++                            Панель найдёт связанные хосты и точные значения в профилях до
++                            применения.
++                        </Text>
++                        <Select
++                            data={inventory.nodes.map((node) => ({
++                                label: `${node.name} · ${node.address}`,
++                                value: node.uuid
++                            }))}
++                            label="Нода"
++                            onChange={(value) => {
++                                setNodeUuid(value)
++                                setPlan(null)
++                            }}
++                            searchable
++                            value={nodeUuid}
++                        />
++                        <TextInput
++                            label="Новый IP или адрес"
++                            onChange={(event) => {
++                                setNewAddress(event.currentTarget.value)
++                                setPlan(null)
++                            }}
++                            placeholder="203.0.113.20"
++                            value={newAddress}
++                        />
++                        <Button
++                            disabled={!nodeUuid || !newAddress.trim()}
++                            leftSection={<TbTopologyStar3 size={17} />}
++                            loading={busy}
++                            onClick={createPlan}
++                        >
++                            Построить план
++                        </Button>
++                    </Stack>
++                </Paper>
++            </Grid.Col>
++            <Grid.Col span={{ base: 12, lg: 7 }}>
++                <Paper mih={300} p="lg" radius="md" withBorder>
++                    {!plan ? (
++                        <Stack align="center" h={250} justify="center">
++                            <ThemeIcon color="gray" radius="xl" size={54} variant="light">
++                                <TbArrowsExchange size={28} />
++                            </ThemeIcon>
++                            <Text c="dimmed" ta="center">
++                                Выберите ноду и новый адрес — здесь появится точный план изменений.
++                            </Text>
++                        </Stack>
++                    ) : (
++                        <Stack>
++                            <Group justify="space-between">
++                                <Title order={4}>{plan.node.name}</Title>
++                                <Badge color="blue" variant="light">
++                                    План готов
++                                </Badge>
++                            </Group>
++                            <Code block>
++                                {plan.node.oldAddress} → {plan.node.newAddress}
++                            </Code>
++                            <SimpleGrid cols={{ base: 1, sm: 3 }}>
++                                <MetricCard color="blue" label="Нод" value={plan.impact.nodes} />
++                                <MetricCard
++                                    color="violet"
++                                    label="Хостов"
++                                    value={plan.impact.hosts}
++                                />
++                                <MetricCard
++                                    color="grape"
++                                    label="Значений профиля"
++                                    value={plan.impact.profileValues}
++                                />
++                            </SimpleGrid>
++                            {plan.hosts.map((host, index) => (
++                                <Alert
++                                    color={host.willChange ? 'blue' : 'gray'}
++                                    key={`${host.remark}-${index}`}
++                                    title={`Хост · ${host.remark}`}
++                                    variant="light"
++                                >
++                                    {host.willChange
++                                        ? `${host.oldAddress} → ${host.newAddress}`
++                                        : 'Связан с нодой, адрес не меняется'}
++                                </Alert>
++                            ))}
++                            {plan.profiles.map((profile) => (
++                                <Alert
++                                    color="violet"
++                                    key={profile.name}
++                                    title={`Профиль · ${profile.name}`}
++                                >
++                                    Точных вхождений IP: {profile.matches}
++                                </Alert>
++                            ))}
++                            {plan.warnings.map((warning) => (
++                                <Alert
++                                    color="yellow"
++                                    icon={<TbAlertTriangle size={18} />}
++                                    key={warning}
++                                    title="Требуется ручная проверка"
++                                >
++                                    {warning}
++                                </Alert>
++                            ))}
++                            <Divider />
++                            <TextInput
++                                description="Защита от случайного изменения"
++                                label={`Введите точное имя ноды: ${plan.node.name}`}
++                                onChange={(event) => setConfirmation(event.currentTarget.value)}
++                                value={confirmation}
++                            />
++                            <Button
++                                color="red"
++                                disabled={confirmation !== plan.node.name}
++                                leftSection={<TbShieldCheck size={17} />}
++                                loading={busy}
++                                onClick={apply}
++                            >
++                                Применить, проверить и сохранить
++                            </Button>
++                        </Stack>
++                    )}
++                </Paper>
++            </Grid.Col>
++        </Grid>
++    )
++}
++
++function NodeAddView({ inventory, onComplete }: { inventory: Inventory; onComplete: () => void }) {
++    const [ssh, setSsh] = useState<SshForm>({
++        host: '',
++        password: '',
++        port: 22,
++        privateKey: '',
++        username: 'root'
++    })
++    const [node, setNode] = useState<NodeForm>({
++        address: '',
++        countryCode: '',
++        inboundUuids: [],
++        name: '',
++        port: 2222,
++        profileUuid: ''
++    })
++    const [host, setHost] = useState<HostForm>({
++        address: '',
++        enabled: true,
++        fingerprint: '',
++        inboundUuid: '',
++        port: 443,
++        remark: '',
++        sni: '',
++        squadUuids: inventory.squads
++            .filter((item) => /(^|\s)BASE($|\s)/i.test(item.name))
++            .map((item) => item.uuid)
++    })
++    const [sshCheck, setSshCheck] = useState<SshCheck | null>(null)
++    const [plan, setPlan] = useState<NodePlan | null>(null)
++    const [confirmation, setConfirmation] = useState('')
++    const [busy, setBusy] = useState(false)
++
++    const profile = inventory.profiles.find((item) => item.uuid === node.profileUuid)
++    const inboundData = (profile?.inbounds || []).map((item) => ({
++        label: `${item.tag || 'Inbound'} · ${item.type || 'unknown'}`,
++        value: item.uuid
++    }))
++
++    const checkSsh = async () => {
++        setBusy(true)
++        try {
++            const result = await api<SshCheck>('/node-add/ssh-preflight', 'POST', { ssh })
++            if (result.existingNode) throw new Error('На сервере уже установлена Remnawave Node')
++            setSshCheck(result)
++            setPlan(null)
++            setNode((value) => ({ ...value, address: value.address || ssh.host }))
++            setHost((value) => ({ ...value, address: value.address || ssh.host }))
++            notifications.show({ color: 'teal', message: 'SSH и системные требования проверены' })
++        } catch (error) {
++            setSshCheck(null)
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setBusy(false)
++        }
++    }
++
++    const createPlan = async () => {
++        if (!sshCheck) {
++            notifications.show({ color: 'red', message: 'Сначала проверьте SSH-соединение' })
++            return
++        }
++        setBusy(true)
++        try {
++            const result = await api<NodePlan>('/node-add/plan', 'POST', { node, host })
++            setPlan(result)
++            setConfirmation('')
++            notifications.show({ color: 'blue', message: 'План установки сформирован' })
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setBusy(false)
++        }
++    }
++
++    const apply = async () => {
++        if (!plan || !sshCheck) return
++        setBusy(true)
++        try {
++            const result = await api<{ nodeUuid: string }>('/node-add/apply', 'POST', {
++                confirmation,
++                expectedFingerprint: sshCheck.fingerprint,
++                operationId: plan.operationId,
++                ssh
++            })
++            notifications.show({
++                color: 'teal',
++                message: `Нода добавлена и проверена · ${result.nodeUuid}`
++            })
++            setSsh({ host: '', password: '', port: 22, privateKey: '', username: 'root' })
++            setNode({
++                address: '',
++                countryCode: '',
++                inboundUuids: [],
++                name: '',
++                port: 2222,
++                profileUuid: ''
++            })
++            setHost({
++                address: '',
++                enabled: true,
++                fingerprint: '',
++                inboundUuid: '',
++                port: 443,
++                remark: '',
++                sni: '',
++                squadUuids: []
++            })
++            setSshCheck(null)
++            setPlan(null)
++            setConfirmation('')
++            onComplete()
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setBusy(false)
++        }
++    }
++
++    return (
++        <Stack gap="lg">
++            <Alert color="blue" icon={<TbShieldCheck size={20} />} title="Безопасная установка">
++                Сначала фиксируется SSH fingerprint. Существующая /opt/remnanode не
++                перезаписывается, Node Port открывается только для IP панели, а при ошибке
++                выполняется откат.
++            </Alert>
++
++            <Grid gap="lg">
++                <Grid.Col span={{ base: 12, xl: 4 }}>
++                    <Paper p="lg" radius="md" withBorder>
++                        <Stack>
++                            <Title order={4}>1. Доступ к серверу</Title>
++                            <TextInput
++                                label="IP или хост"
++                                onChange={(event) => {
++                                    setSsh({ ...ssh, host: event.currentTarget.value })
++                                    setSshCheck(null)
++                                }}
++                                value={ssh.host}
++                            />
++                            <Group grow>
++                                <NumberInput
++                                    label="SSH порт"
++                                    max={65535}
++                                    min={1}
++                                    onChange={(value) => {
++                                        setSsh({ ...ssh, port: Number(value) })
++                                        setSshCheck(null)
++                                    }}
++                                    value={ssh.port}
++                                />
++                                <TextInput
++                                    label="Пользователь"
++                                    onChange={(event) => {
++                                        setSsh({ ...ssh, username: event.currentTarget.value })
++                                        setSshCheck(null)
++                                    }}
++                                    value={ssh.username}
++                                />
++                            </Group>
++                            <PasswordInput
++                                label="Пароль"
++                                onChange={(event) => {
++                                    setSsh({ ...ssh, password: event.currentTarget.value })
++                                    setSshCheck(null)
++                                }}
++                                value={ssh.password}
++                            />
++                            <Textarea
++                                autosize
++                                label="Приватный SSH-ключ"
++                                maxRows={6}
++                                minRows={3}
++                                onChange={(event) => {
++                                    setSsh({ ...ssh, privateKey: event.currentTarget.value })
++                                    setSshCheck(null)
++                                }}
++                                placeholder="Вместо пароля, если требуется"
++                                value={ssh.privateKey}
++                            />
++                            <Button
++                                disabled={!ssh.host || (!ssh.password && !ssh.privateKey)}
++                                leftSection={<TbShieldCheck size={17} />}
++                                loading={busy}
++                                onClick={checkSsh}
++                                variant={sshCheck ? 'light' : 'filled'}
++                            >
++                                {sshCheck ? 'Проверить повторно' : 'Проверить SSH'}
++                            </Button>
++                            {sshCheck && (
++                                <Alert
++                                    color="teal"
++                                    icon={<TbCheck size={18} />}
++                                    title="Сервер готов"
++                                >
++                                    <Stack gap={4}>
++                                        <Text size="sm">
++                                            {sshCheck.distribution} · {sshCheck.architecture} ·{' '}
++                                            {sshCheck.docker}
++                                        </Text>
++                                        <Code>{sshCheck.fingerprint}</Code>
++                                    </Stack>
++                                </Alert>
++                            )}
++                        </Stack>
++                    </Paper>
++                </Grid.Col>
++
++                <Grid.Col span={{ base: 12, xl: 4 }}>
++                    <Paper p="lg" radius="md" withBorder>
++                        <Stack>
++                            <Title order={4}>2. Нода и профиль</Title>
++                            <TextInput
++                                label="Название ноды"
++                                maxLength={30}
++                                onChange={(event) =>
++                                    setNode({ ...node, name: event.currentTarget.value })
++                                }
++                                placeholder="Germany-5"
++                                value={node.name}
++                            />
++                            <TextInput
++                                label="Адрес ноды"
++                                onChange={(event) =>
++                                    setNode({ ...node, address: event.currentTarget.value })
++                                }
++                                value={node.address}
++                            />
++                            <Group grow>
++                                <NumberInput
++                                    label="Node Port"
++                                    max={65535}
++                                    min={1}
++                                    onChange={(value) => setNode({ ...node, port: Number(value) })}
++                                    value={node.port}
++                                />
++                                <TextInput
++                                    label="Код страны"
++                                    maxLength={2}
++                                    onChange={(event) =>
++                                        setNode({
++                                            ...node,
++                                            countryCode: event.currentTarget.value.toUpperCase()
++                                        })
++                                    }
++                                    placeholder="DE"
++                                    value={node.countryCode}
++                                />
++                            </Group>
++                            <Select
++                                data={inventory.profiles.map((item) => ({
++                                    label: item.name,
++                                    value: item.uuid
++                                }))}
++                                label="Профиль конфигурации"
++                                onChange={(value) => {
++                                    setNode({
++                                        ...node,
++                                        inboundUuids: [],
++                                        profileUuid: value || ''
++                                    })
++                                    setHost({ ...host, inboundUuid: '' })
++                                    setPlan(null)
++                                }}
++                                searchable
++                                value={node.profileUuid || null}
++                            />
++                            <MultiSelect
++                                data={inboundData}
++                                label="Inbound ноды"
++                                onChange={(value) => {
++                                    setNode({ ...node, inboundUuids: value })
++                                    if (!host.inboundUuid && value[0]) {
++                                        setHost({ ...host, inboundUuid: value[0] })
++                                    }
++                                    setPlan(null)
++                                }}
++                                searchable
++                                value={node.inboundUuids}
++                            />
++                        </Stack>
++                    </Paper>
++                </Grid.Col>
++
++                <Grid.Col span={{ base: 12, xl: 4 }}>
++                    <Paper p="lg" radius="md" withBorder>
++                        <Stack>
++                            <Group justify="space-between">
++                                <Title order={4}>3. Клиентский хост</Title>
++                                <Switch
++                                    checked={host.enabled}
++                                    label={host.enabled ? 'Создать' : 'Не создавать'}
++                                    onChange={(event) =>
++                                        setHost({ ...host, enabled: event.currentTarget.checked })
++                                    }
++                                />
++                            </Group>
++                            <TextInput
++                                disabled={!host.enabled}
++                                label="Название хоста"
++                                onChange={(event) =>
++                                    setHost({ ...host, remark: event.currentTarget.value })
++                                }
++                                placeholder={node.name || 'Germany-5'}
++                                value={host.remark}
++                            />
++                            <TextInput
++                                disabled={!host.enabled}
++                                label="Адрес хоста"
++                                onChange={(event) =>
++                                    setHost({ ...host, address: event.currentTarget.value })
++                                }
++                                value={host.address}
++                            />
++                            <NumberInput
++                                disabled={!host.enabled}
++                                label="Порт хоста"
++                                max={65535}
++                                min={1}
++                                onChange={(value) => setHost({ ...host, port: Number(value) })}
++                                value={host.port}
++                            />
++                            <Select
++                                data={inboundData}
++                                disabled={!host.enabled}
++                                label="Inbound хоста"
++                                onChange={(value) => setHost({ ...host, inboundUuid: value || '' })}
++                                searchable
++                                value={host.inboundUuid || null}
++                            />
++                            <MultiSelect
++                                data={inventory.squads.map((item) => ({
++                                    label: item.name,
++                                    value: item.uuid
++                                }))}
++                                disabled={!host.enabled}
++                                label="Доступные сквады"
++                                onChange={(value) => setHost({ ...host, squadUuids: value })}
++                                searchable
++                                value={host.squadUuids}
++                            />
++                            <Group grow>
++                                <TextInput
++                                    disabled={!host.enabled}
++                                    label="SNI"
++                                    onChange={(event) =>
++                                        setHost({ ...host, sni: event.currentTarget.value })
++                                    }
++                                    value={host.sni}
++                                />
++                                <TextInput
++                                    disabled={!host.enabled}
++                                    label="Fingerprint"
++                                    onChange={(event) =>
++                                        setHost({ ...host, fingerprint: event.currentTarget.value })
++                                    }
++                                    value={host.fingerprint}
++                                />
++                            </Group>
++                        </Stack>
++                    </Paper>
++                </Grid.Col>
++            </Grid>
++
++            <Paper p="lg" radius="md" withBorder>
++                {!plan ? (
++                    <Group justify="space-between">
++                        <Stack gap={2}>
++                            <Title order={4}>Проверка перед установкой</Title>
++                            <Text c="dimmed" size="sm">
++                                Ничего не изменится, пока вы не проверите план и не подтвердите имя
++                                ноды.
++                            </Text>
++                        </Stack>
++                        <Button
++                            disabled={
++                                !sshCheck ||
++                                !node.name ||
++                                !node.address ||
++                                !node.profileUuid ||
++                                node.inboundUuids.length === 0 ||
++                                (host.enabled &&
++                                    (!host.inboundUuid || host.squadUuids.length === 0))
++                            }
++                            leftSection={<TbTopologyStar3 size={17} />}
++                            loading={busy}
++                            onClick={createPlan}
++                        >
++                            Проверить план
++                        </Button>
++                    </Group>
++                ) : (
++                    <Stack>
++                        <Group justify="space-between">
++                            <Stack gap={2}>
++                                <Title order={4}>План готов</Title>
++                                <Text c="dimmed" size="sm">
++                                    Установка Docker/Node, настройка файрвола, создание ноды и
++                                    хоста, затем проверка связи.
++                                </Text>
++                            </Stack>
++                            <Badge color="blue">Проверен</Badge>
++                        </Group>
++                        <SimpleGrid cols={{ base: 1, md: 3 }}>
++                            <Alert color="blue" title="Нода">
++                                {plan.node.name} · {plan.node.address}:{plan.node.port}
++                            </Alert>
++                            <Alert color="violet" title="Профиль">
++                                {plan.node.profileName} · inbound: {plan.node.inboundUuids.length}
++                            </Alert>
++                            <Alert color="cyan" title="Хост">
++                                {plan.host.enabled
++                                    ? `${plan.host.remark} · ${plan.host.address}:${plan.host.port}`
++                                    : 'Не создаётся'}
++                            </Alert>
++                        </SimpleGrid>
++                        <TextInput
++                            description="SSH-пароль и ключ не сохраняются в журнале"
++                            label={`Введите точное имя ноды: ${plan.node.name}`}
++                            onChange={(event) => setConfirmation(event.currentTarget.value)}
++                            value={confirmation}
++                        />
++                        <Group justify="flex-end">
++                            <Button color="gray" onClick={() => setPlan(null)} variant="light">
++                                Изменить параметры
++                            </Button>
++                            <Button
++                                color="red"
++                                disabled={confirmation !== plan.node.name}
++                                leftSection={<TbShieldCheck size={17} />}
++                                loading={busy}
++                                onClick={apply}
++                            >
++                                Установить и проверить
++                            </Button>
++                        </Group>
++                    </Stack>
++                )}
++            </Paper>
++        </Stack>
++    )
++}
++
++function HistoryView({ operations }: { operations: Operation[] }) {
++    return (
++        <Paper p="lg" radius="md" withBorder>
++            <Group justify="space-between" mb="md">
++                <Stack gap={2}>
++                    <Title order={4}>Журнал операций</Title>
++                    <Text c="dimmed" size="sm">
++                        Только технический результат и затронутые объекты — без SSH-данных и
++                        токенов.
++                    </Text>
++                </Stack>
++                <ThemeIcon color="gray" radius="md" size="lg" variant="light">
++                    <TbHistory size={20} />
++                </ThemeIcon>
++            </Group>
++            <ScrollArea>
++                <Table highlightOnHover miw={720} verticalSpacing="sm">
++                    <Table.Thead>
++                        <Table.Tr>
++                            <Table.Th>Операция</Table.Th>
++                            <Table.Th>Объект</Table.Th>
++                            <Table.Th>Время</Table.Th>
++                            <Table.Th>Состояние</Table.Th>
++                        </Table.Tr>
++                    </Table.Thead>
++                    <Table.Tbody>
++                        {operations.length ? (
++                            operations.map((operation) => (
++                                <Table.Tr key={operation.id}>
++                                    <Table.Td>
++                                        {operation.type === 'node-add'
++                                            ? 'Добавление ноды'
++                                            : 'Смена IP'}
++                                    </Table.Td>
++                                    <Table.Td fw={600}>{operation.resource}</Table.Td>
++                                    <Table.Td>
++                                        {new Date(operation.createdAt).toLocaleString('ru-RU')}
++                                    </Table.Td>
++                                    <Table.Td>
++                                        <Badge color={stateColor(operation.state)} variant="light">
++                                            {stateLabel(operation.state)}
++                                        </Badge>
++                                    </Table.Td>
++                                </Table.Tr>
++                            ))
++                        ) : (
++                            <Table.Tr>
++                                <Table.Td colSpan={4}>
++                                    <Text c="dimmed" py="xl" ta="center">
++                                        Операций пока нет
++                                    </Text>
++                                </Table.Td>
++                            </Table.Tr>
++                        )}
++                    </Table.Tbody>
++                </Table>
++            </ScrollArea>
++        </Paper>
++    )
++}
++
++export function InfrastructurePage() {
++    const [inventory, setInventory] = useState<Inventory | null>(null)
++    const [operations, setOperations] = useState<Operation[]>([])
++    const [loading, setLoading] = useState(true)
++
++    const load = async (quiet = false) => {
++        if (!quiet) setLoading(true)
++        try {
++            const [inventoryResult, operationsResult] = await Promise.all([
++                api<Inventory>('/inventory'),
++                api<{ operations: Operation[] }>('/operations')
++            ])
++            setInventory(inventoryResult)
++            setOperations(operationsResult.operations)
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setLoading(false)
++        }
++    }
++
++    useEffect(() => {
++        let cancelled = false
++        Promise.all([api<Inventory>('/inventory'), api<{ operations: Operation[] }>('/operations')])
++            .then(([inventoryResult, operationsResult]) => {
++                if (cancelled) return
++                setInventory(inventoryResult)
++                setOperations(operationsResult.operations)
++            })
++            .catch((error: unknown) => {
++                if (!cancelled) {
++                    notifications.show({ color: 'red', message: errorMessage(error) })
++                }
++            })
++            .finally(() => {
++                if (!cancelled) setLoading(false)
++            })
++        return () => {
++            cancelled = true
++        }
++    }, [])
++
++    const statusText = useMemo(() => {
++        if (!inventory) return 'Получаем данные'
++        const offline = inventory.summary.nodes - inventory.summary.connectedNodes
++        return offline === 0 ? 'Все ноды на связи' : `Требуют внимания: ${offline}`
++    }, [inventory])
++
++    return (
++        <Page title="Инфраструктура">
++            <Stack gap="lg">
++                <PageHeaderShared
++                    actions={
++                        <Badge
++                            color={
++                                inventory?.summary.connectedNodes === inventory?.summary.nodes
++                                    ? 'teal'
++                                    : 'yellow'
++                            }
++                            size="lg"
++                            variant="light"
++                        >
++                            {statusText}
++                        </Badge>
++                    }
++                    icon={<TbServerCog size={24} />}
++                    title="Инфраструктура"
++                />
++
++                {loading || !inventory ? (
++                    <LoadingScreen height="60vh" />
++                ) : (
++                    <Tabs defaultValue="overview" keepMounted={false} variant="outline">
++                        <Tabs.List>
++                            <Tabs.Tab
++                                leftSection={<TbActivityHeartbeat size={16} />}
++                                value="overview"
++                            >
++                                Обзор
++                            </Tabs.Tab>
++                            <Tabs.Tab leftSection={<TbPlus size={16} />} value="node-add">
++                                Добавить ноду
++                            </Tabs.Tab>
++                            <Tabs.Tab
++                                leftSection={<TbArrowsExchange size={16} />}
++                                value="ip-change"
++                            >
++                                Смена IP
++                            </Tabs.Tab>
++                            <Tabs.Tab leftSection={<TbHistory size={16} />} value="history">
++                                Журнал
++                            </Tabs.Tab>
++                        </Tabs.List>
++
++                        <Tabs.Panel pt="lg" value="overview">
++                            <InventoryView
++                                inventory={inventory}
++                                onRefresh={() => void load(true)}
++                            />
++                        </Tabs.Panel>
++                        <Tabs.Panel pt="lg" value="node-add">
++                            <NodeAddView inventory={inventory} onComplete={() => void load(true)} />
++                        </Tabs.Panel>
++                        <Tabs.Panel pt="lg" value="ip-change">
++                            <IpChangeView
++                                inventory={inventory}
++                                onComplete={() => void load(true)}
++                            />
++                        </Tabs.Panel>
++                        <Tabs.Panel pt="lg" value="history">
++                            <HistoryView operations={operations} />
++                        </Tabs.Panel>
++                    </Tabs>
++                )}
++            </Stack>
++        </Page>
++    )
++}
+diff --git a/src/shared/constants/routes.ts b/src/shared/constants/routes.ts
+index 736c59e..f89c61b 100644
+--- a/src/shared/constants/routes.ts
++++ b/src/shared/constants/routes.ts
+@@ -14,6 +14,7 @@ export const ROUTES = {
+             USERS: '/dashboard/management/users',
+             HOSTS: '/dashboard/management/hosts',
+             NODES: '/dashboard/management/nodes',
++            INFRASTRUCTURE: '/dashboard/management/infrastructure',
+             NODES_BANDWIDTH_TABLE: '/dashboard/management/bandwidth-table',
+             NODES_STATS: '/dashboard/management/stats/nodes',
+             NODES_METRICS: '/dashboard/management/metrics/nodes',

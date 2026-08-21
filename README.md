@@ -8,12 +8,12 @@
 - фирменный маскот HAMVPN на прозрачном фоне;
 - полупрозрачные верхняя панель и навигация;
 - название вкладки и цвет системной темы;
-- отдельный раздел `Инфраструктура` в навигации;
+- нативная вкладка `Инфраструктура` внутри React-интерфейса Remnawave;
 - постоянная ссылка на исходный код темы для соблюдения AGPL-3.0.
 
 ## Инфраструктура
 
-Модуль запускается отдельным контейнером и доступен на `/ham-infrastructure/` через тот же домен панели. Токен берётся текущей страницей из существующей авторизованной сессии Remnawave и передаётся только в запросе. Модуль не сохраняет токены, SSH-пароли и приватные ключи.
+Вкладка доступна по `/dashboard/management/infrastructure` внутри обычной оболочки панели. Она собрана из официального исходника Remnawave `2.8.1` (commit `9d671520067f73b2beb96c282f2ce2ff7b7a9a00`) и использует штатные роутер, навигацию и компоненты Mantine. Служебный API запускается отдельным изолированным контейнером на `/ham-infrastructure/api/`. Токен приходит из существующей авторизованной сессии Remnawave; модуль не сохраняет токены, SSH-пароли и приватные ключи.
 
 Возможности:
 
@@ -42,13 +42,14 @@ docker build --pull=false \
   orchestrator
 ```
 
-Базовый образ закреплён по digest, поэтому сборка воспроизводима и не получает обновления Remnawave неожиданно.
+Базовый backend-образ, frontend commit и Node.js build-образ закреплены по digest/commit, поэтому сборка не получает обновление Remnawave неожиданно.
 
 ## Проверка
 
 ```bash
 docker run --rm --entrypoint sh hamvpn/remnawave:2-theme -lc \
   "test -s /opt/app/frontend/hamvpn/hamvpn-mascot.png && \
+   grep -q /dashboard/management/infrastructure /opt/app/frontend/assets/index-*.js && \
    grep -q /hamvpn/hamvpn-theme.css /opt/app/frontend/index.html && \
    grep -q hamvpn-source-link /opt/app/frontend/index.html"
 ```
@@ -74,7 +75,7 @@ install -d -o 10001 -g 10001 -m 700 /opt/hamvpn-infrastructure
 
 ## Откат
 
-Удалить location `/ham-infrastructure/` из Nginx, вернуть предыдущий `deploy/docker-compose.theme.yml` и пересоздать сервисы. Для отката только темы вернуть предыдущий `hamvpn/remnawave:2-theme`. База данных Remnawave и её volumes при этом не изменяются.
+Для отката вернуть предыдущий `hamvpn/remnawave:2-theme`. Если служебный API больше не нужен, отдельно удалить location `/ham-infrastructure/` из Nginx и сервис `hamvpn-infrastructure`. База данных Remnawave и её volumes при этом не изменяются.
 
 ## Лицензия
 

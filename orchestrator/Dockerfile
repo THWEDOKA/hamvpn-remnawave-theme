@@ -11,10 +11,8 @@ RUN pip install --disable-pip-version-check -r /app/requirements.txt \
     && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin infrastructure
 
 COPY app /app/app
-COPY static /app/static
 
 USER 10001:10001
 EXPOSE 8090
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
-

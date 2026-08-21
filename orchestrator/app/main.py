@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict, deque
-from pathlib import Path
 from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from .audit import AuditStore
 from .inventory import normalize_inventory
@@ -188,7 +186,3 @@ async def node_apply(
         body.get("ssh") if isinstance(body.get("ssh"), dict) else {},
         str(body.get("expectedFingerprint") or ""),
     )
-
-
-static_dir = Path(__file__).parent.parent / "static"
-app.mount(BASE, StaticFiles(directory=static_dir, html=True), name="infrastructure")
