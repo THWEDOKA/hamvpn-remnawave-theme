@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .audit import AuditStore
+from .cloudflare import CloudflareClient, CloudflareConfigStore, CloudflareError
 from .inventory import normalize_inventory
 from .operations import (
     OperationError,
@@ -25,6 +26,19 @@ from .ssh import SshError
 BASE = "/ham-infrastructure"
 app = FastAPI(title="HAMVPN Infrastructure", docs_url=None, redoc_url=None, openapi_url=None)
 store = AuditStore(settings.data_dir)
+cloudflare_store = CloudflareConfigStore(settings.data_dir)
+stored_cloudflare = cloudflare_store.load()
+try:
+    stored_cloudflare_ttl = int(stored_cloudflare.get("ttl") or settings.cloudflare_dns_ttl)
+except (TypeError, ValueError):
+    stored_cloudflare_ttl = settings.cloudflare_dns_ttl
+cloudflare = CloudflareClient(
+    str(stored_cloudflare.get("token") or settings.cloudflare_token),
+    stored_cloudflare.get("zoneIds")
+    if isinstance(stored_cloudflare.get("zoneIds"), dict)
+    else settings.cloudflare_zone_ids,
+    stored_cloudflare_ttl,
+)
 rate_buckets: dict[str, deque[float]] = defaultdict(deque)
 
 
@@ -71,6 +85,11 @@ async def ssh_error(_: Request, error: SshError) -> JSONResponse:
     return JSONResponse({"detail": str(error)}, status_code=422)
 
 
+@app.exception_handler(CloudflareError)
+async def cloudflare_error(_: Request, error: CloudflareError) -> JSONResponse:
+    return JSONResponse({"detail": str(error)}, status_code=422)
+
+
 @app.get(f"{BASE}/healthz")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -82,7 +101,32 @@ async def inventory(ctx: tuple[str, str, RemnawaveClient] = Depends(context)) ->
     result = normalize_inventory(await client.inventory())
     for profile in result["profiles"]:
         profile.pop("config", None)
+    result["cloudflare"] = {
+        "configured": cloudflare.configured,
+        "zones": sorted(cloudflare.zone_ids),
+    }
     return result
+
+
+@app.post(f"{BASE}/api/cloudflare/config")
+async def cloudflare_config(
+    request: Request,
+    ctx: tuple[str, str, RemnawaveClient] = Depends(context),
+) -> dict[str, Any]:
+    _, actor, client = ctx
+    mutation_guard(request, actor, 6)
+    await client.validate()
+    body = await request.json()
+    token = str(body.get("token") or "").strip()
+    zone_name = str(body.get("zone") or "").strip().rstrip(".").lower()
+    if len(token) < 20:
+        raise CloudflareError("Укажите действующий Cloudflare API-токен")
+    candidate = CloudflareClient(token, ttl=settings.cloudflare_dns_ttl)
+    zone_id = await candidate.verify_zone(zone_name)
+    zone_ids = {zone_name: zone_id}
+    cloudflare_store.save(token, zone_ids, candidate.ttl)
+    cloudflare.configure(token, zone_ids, candidate.ttl)
+    return {"configured": True, "zone": zone_name, "ttl": candidate.ttl}
 
 
 @app.get(f"{BASE}/api/operations")
@@ -103,7 +147,14 @@ async def operations(ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -
                 "result": {
                     key: value
                     for key, value in item["result"].items()
-                    if key in {"verified", "warning", "newAddress", "rollbackErrors"}
+                    if key
+                    in {
+                        "verified",
+                        "warning",
+                        "newAddress",
+                        "rollbackErrors",
+                        "dnsRecords",
+                    }
                 },
             }
             for item in rows
@@ -125,6 +176,7 @@ async def ip_plan(
         actor,
         str(body.get("nodeUuid") or ""),
         str(body.get("newAddress") or ""),
+        cloudflare,
     )
 
 
@@ -143,6 +195,7 @@ async def ip_apply(
         actor,
         str(body.get("operationId") or ""),
         str(body.get("confirmation") or ""),
+        cloudflare,
     )
 
 

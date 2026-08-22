@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 from copy import deepcopy
 from typing import Any
@@ -111,6 +112,35 @@ def replace_paths(value: Any, paths: list[list[Any]], replacement: str) -> Any:
     return result
 
 
+def _node_uuids(host: dict[str, Any]) -> set[str]:
+    result = set()
+    for value in host.get("nodes") or []:
+        uuid = value.get("uuid") if isinstance(value, dict) else value
+        if uuid:
+            result.add(str(uuid))
+    return result
+
+
+def hysteria_hostnames(inventory: dict[str, Any], node_uuid: str) -> list[str]:
+    result = set()
+    for host in inventory["hosts"]:
+        if node_uuid not in _node_uuids(host):
+            continue
+        inbound = host.get("inbound") or {}
+        protocol = f"{inbound.get('type', '')} {inbound.get('network', '')}".lower()
+        if "hysteria" not in protocol:
+            continue
+        address = str(host.get("address") or "").strip().rstrip(".").lower()
+        try:
+            ipaddress.ip_address(address)
+            continue
+        except ValueError:
+            pass
+        if address and "." in address:
+            result.add(address)
+    return sorted(result)
+
+
 def build_ip_plan(inventory: dict[str, Any], node_uuid: str, new_address: str) -> dict[str, Any]:
     nodes = inventory["nodes"]
     node = next((item for item in nodes if item.get("uuid") == node_uuid), None)
@@ -124,7 +154,7 @@ def build_ip_plan(inventory: dict[str, Any], node_uuid: str, new_address: str) -
     related_hosts = []
     for host in inventory["hosts"]:
         reasons = []
-        if node_uuid in (host.get("nodes") or []):
+        if node_uuid in _node_uuids(host):
             reasons.append("host-node-link")
         if host.get("address") == old_address:
             reasons.append("address-match")

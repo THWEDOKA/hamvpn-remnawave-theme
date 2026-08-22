@@ -28,3 +28,10 @@ def test_infrastructure_uses_live_session_without_global_logout_interceptor():
     assert "import { useToken } from '@entities/auth'" in patch
     assert "headers: { Authorization: `Bearer ${token}` }" in patch
     assert "import { instance } from '@shared/api'" not in patch
+
+
+def test_cloudflare_secret_is_runtime_only():
+    compose = (ROOT / "deploy" / "docker-compose.theme.yml").read_text(encoding="utf-8")
+    patch = (ROOT / "frontend" / "remnawave-2.8.1.patch").read_text(encoding="utf-8")
+    assert "CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_TOKEN:-}" in compose
+    assert "CLOUDFLARE_TOKEN=" not in patch

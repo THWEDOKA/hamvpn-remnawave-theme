@@ -84,6 +84,38 @@ class FakeClient:
         self.restarted.append((uuid, force_restart))
 
 
+class FakeCloudflare:
+    configured = True
+
+    def __init__(self):
+        self.updated = []
+
+    async def plan_records(self, hostnames, old_address, new_address):
+        return [
+            {
+                "zoneId": "zone-1",
+                "recordId": "record-1",
+                "hostname": hostnames[0],
+                "oldAddress": old_address,
+                "newAddress": new_address,
+                "oldTtl": 300,
+                "newTtl": 60,
+                "proxyWasEnabled": False,
+            }
+        ]
+
+    async def update_record(self, record, address, ttl, expected_address=None):
+        self.updated.append((record["hostname"], address, ttl, expected_address))
+
+    async def public_dns(self, hostname, expected_address):
+        return {
+            "hostname": hostname,
+            "cloudflare": [expected_address],
+            "google": [expected_address],
+            "propagated": True,
+        }
+
+
 def test_ip_change_applies_and_verifies(tmp_path: Path, monkeypatch):
     async def no_tcp_check(*_args, **_kwargs):
         return None
@@ -135,6 +167,76 @@ def test_ip_change_restarts_nodes_using_changed_profile(tmp_path: Path, monkeypa
 
     assert client.restarted == [("node-1", False), ("bridge-node", False)]
     assert result["restartErrors"] == []
+
+
+def test_ip_change_updates_hysteria_dns(tmp_path: Path, monkeypatch):
+    async def no_tcp_check(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("orchestrator.app.operations.tcp_check", no_tcp_check)
+    client = FakeClient()
+    client.data["hosts"].append(
+        {
+            "uuid": "host-domain",
+            "remark": "Netherlands Hysteria",
+            "address": "nl.example.test",
+            "port": 443,
+            "nodes": [{"uuid": "node-1"}],
+            "inbound": {"type": "hysteria", "network": "hysteria"},
+        }
+    )
+    cloudflare = FakeCloudflare()
+    store = AuditStore(tmp_path)
+    plan = asyncio.run(
+        create_ip_plan(
+            client,
+            store,
+            "actor",
+            "node-1",
+            "192.0.2.20",
+            cloudflare,
+        )
+    )
+    settings = Settings("", "", tmp_path, "198.51.100.1", "image", 900, 1)
+
+    result = asyncio.run(
+        apply_ip_change(
+            client,
+            store,
+            settings,
+            "actor",
+            plan["operationId"],
+            "Germany-4",
+            cloudflare,
+        )
+    )
+
+    assert plan["impact"]["dnsRecords"] == 1
+    assert cloudflare.updated == [
+        ("nl.example.test", "192.0.2.20", 60, "192.0.2.10")
+    ]
+    assert result["dnsRecords"][0]["propagated"] is True
+
+
+def test_ip_change_blocks_hysteria_without_cloudflare(tmp_path: Path):
+    client = FakeClient()
+    client.data["hosts"].append(
+        {
+            "uuid": "host-domain",
+            "remark": "Netherlands Hysteria",
+            "address": "nl.example.test",
+            "port": 443,
+            "nodes": ["node-1"],
+            "inbound": {"type": "hysteria", "network": "hysteria"},
+        }
+    )
+    store = AuditStore(tmp_path)
+
+    with pytest.raises(OperationError, match="Cloudflare API не настроен"):
+        asyncio.run(create_ip_plan(client, store, "actor", "node-1", "192.0.2.20"))
+
+    assert client.data["nodes"][0]["address"] == "192.0.2.10"
+    assert store.recent() == []
 
 
 def test_ip_change_rolls_back_on_profile_failure(tmp_path: Path, monkeypatch):

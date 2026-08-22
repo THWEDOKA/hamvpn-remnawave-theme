@@ -1,4 +1,9 @@
-from orchestrator.app.inventory import build_ip_plan, normalize_inventory, replace_paths
+from orchestrator.app.inventory import (
+    build_ip_plan,
+    hysteria_hostnames,
+    normalize_inventory,
+    replace_paths,
+)
 
 
 def sample_inventory():
@@ -31,7 +36,8 @@ def sample_inventory():
                     "remark": "Germany domain",
                     "address": "de.example.test",
                     "port": 443,
-                    "nodes": ["node-1"],
+                    "nodes": [{"uuid": "node-1"}],
+                    "inbound": {"type": "hysteria", "network": "hysteria"},
                 },
             ],
             "profiles": {
@@ -78,3 +84,6 @@ def test_replace_paths_preserves_original():
     assert source["a"][0]["ip"] == "192.0.2.10"
     assert result == {"a": [{"ip": "192.0.2.20"}], "other": "192.0.2.10:443"}
 
+
+def test_hysteria_hostnames_only_returns_linked_domains():
+    assert hysteria_hostnames(sample_inventory(), "node-1") == ["de.example.test"]

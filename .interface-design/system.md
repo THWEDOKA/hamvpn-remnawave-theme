@@ -26,11 +26,12 @@ Operator-first control surface for emergency infrastructure work. The interface 
 - Confirmation field requiring exact resource name before mutation
 - Status chips: green completed, amber pending, red rollback/error
 - Audit rows never expose tokens, credentials, private keys, or configuration snapshots
+- DNS impact rows show exact hostname and old → new IP in monospace, with DNS-only and TTL as explicit policy states
 
 ## Behavior
 
 - Planning and preflight do not mutate infrastructure
 - Mutation buttons enter a visible busy state and cannot be double-submitted
 - Existing node installations are never overwritten automatically
+- Hysteria domain changes are blocked before mutation unless the exact Cloudflare record is verified
 - Mobile navigation moves to a four-button bottom rail
-

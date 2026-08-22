@@ -1,5 +1,5 @@
 diff --git a/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts b/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
-index 8098cc7..26bc472 100644
+index 8098cc7a67e153e367202f4cad4008b108b23749..26bc47273d5e95d196ede1d5bea0584017d20bdf 100644
 --- a/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
 +++ b/src/app/layouts/dashboard/main-layout/menu-sections/desktop-menu-sections.ts
 @@ -23,6 +23,7 @@ import {
@@ -24,7 +24,7 @@ index 8098cc7..26bc472 100644
                      name: `${t('constants.node-plugins')} β`,
                      href: ROUTES.DASHBOARD.MANAGEMENT.NODE_PLUGINS.ROOT,
 diff --git a/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts b/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
-index 7e74941..214bfbd 100644
+index 7e749413e0ff5dfb4078bc3ecfba201a15d3ae83..214bfbd09d43f2d8eab4f8fe1af30e4615245c5a 100644
 --- a/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
 +++ b/src/app/layouts/dashboard/main-layout/menu-sections/mobile-menu-sections.ts
 @@ -24,6 +24,7 @@ import {
@@ -49,7 +49,7 @@ index 7e74941..214bfbd 100644
                              name: `${t('constants.node-plugins')} β`,
                              href: ROUTES.DASHBOARD.MANAGEMENT.NODE_PLUGINS.ROOT,
 diff --git a/src/app/router/router.tsx b/src/app/router/router.tsx
-index fed8476..339f16a 100644
+index fed8476359a60db75c67a4002dc7bde87afda064..339f16a0128489275b4907db24df25d452e938b5 100644
 --- a/src/app/router/router.tsx
 +++ b/src/app/router/router.tsx
 @@ -7,6 +7,7 @@ import { ExternalSquadsPageConnector } from '@pages/dashboard/external-squads/co
@@ -73,10 +73,10 @@ index fed8476..339f16a 100644
                              element={<NodesBandwidthTablePageConnector />}
 diff --git a/src/pages/dashboard/infrastructure/infrastructure.page.tsx b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
 new file mode 100644
-index 0000000..3ba3475
+index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e041f4ad2c4
 --- /dev/null
 +++ b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
-@@ -0,0 +1,1126 @@
+@@ -0,0 +1,1240 @@
 +import {
 +    Alert,
 +    Badge,
@@ -147,6 +147,7 @@ index 0000000..3ba3475
 +type SquadItem = { name: string; uuid: string }
 +
 +type Inventory = {
++    cloudflare: { configured: boolean; zones: string[] }
 +    hosts: unknown[]
 +    nodes: NodeItem[]
 +    profiles: ProfileItem[]
@@ -173,8 +174,19 @@ index 0000000..3ba3475
 +}
 +
 +type IpPlan = {
++    dns: {
++        configured: boolean
++        hostnames: string[]
++        records: {
++            hostname: string
++            newAddress: string
++            newTtl: number
++            oldAddress: string
++            proxyWasEnabled: boolean
++        }[]
++    }
 +    hosts: { newAddress?: string; oldAddress: string; remark: string; willChange: boolean }[]
-+    impact: { hosts: number; nodes: number; profileValues: number }
++    impact: { dnsRecords: number; hosts: number; nodes: number; profileValues: number }
 +    node: { name: string; newAddress: string; oldAddress: string; port: number }
 +    operationId: string
 +    profiles: { matches: number; name: string }[]
@@ -380,6 +392,32 @@ index 0000000..3ba3475
 +    const [confirmation, setConfirmation] = useState('')
 +    const [plan, setPlan] = useState<IpPlan | null>(null)
 +    const [busy, setBusy] = useState(false)
++    const [cloudflareBusy, setCloudflareBusy] = useState(false)
++    const [cloudflareToken, setCloudflareToken] = useState('')
++    const [cloudflareZone, setCloudflareZone] = useState('hambot.ru')
++
++    const connectCloudflare = async () => {
++        if (cloudflareToken.length < 20 || !cloudflareZone.trim()) return
++        setCloudflareBusy(true)
++        try {
++            await api<{ configured: boolean; ttl: number; zone: string }>(
++                token,
++                '/cloudflare/config',
++                'POST',
++                { token: cloudflareToken, zone: cloudflareZone.trim() }
++            )
++            setCloudflareToken('')
++            notifications.show({
++                color: 'teal',
++                message: 'Cloudflare DNS подключён и проверен'
++            })
++            onComplete()
++        } catch (error) {
++            notifications.show({ color: 'red', message: errorMessage(error) })
++        } finally {
++            setCloudflareBusy(false)
++        }
++    }
 +
 +    const createPlan = async () => {
 +        if (!nodeUuid || !newAddress.trim()) return
@@ -432,9 +470,59 @@ index 0000000..3ba3475
 +                    <Stack>
 +                        <Title order={4}>Смена IP ноды</Title>
 +                        <Text c="dimmed" size="sm">
-+                            Панель найдёт связанные хосты и точные значения в профилях до
-+                            применения.
++                            Панель найдёт связанные хосты, маршруты и Hysteria-домены до
++                            применения. DNS обновится через Cloudflare автоматически.
 +                        </Text>
++                        <Alert
++                            color={inventory.cloudflare.configured ? 'teal' : 'yellow'}
++                            icon={
++                                inventory.cloudflare.configured ? (
++                                    <TbShieldCheck size={18} />
++                                ) : (
++                                    <TbAlertTriangle size={18} />
++                                )
++                            }
++                            title={
++                                inventory.cloudflare.configured
++                                    ? 'Cloudflare DNS подключён'
++                                    : 'Cloudflare DNS не настроен'
++                            }
++                            variant="light"
++                        >
++                            {inventory.cloudflare.configured
++                                ? `Для доменных Hysteria-нод A-запись изменится вместе с IP и останется DNS only. Зоны: ${inventory.cloudflare.zones.join(', ') || 'подключены'}.`
++                                : 'Смена IP доменной Hysteria-ноды будет заблокирована до подключения API-токена.'}
++                        </Alert>
++                        <SimpleGrid cols={{ base: 1, sm: 2 }}>
++                            <PasswordInput
++                                description="Zone DNS Edit + Zone Read"
++                                label={
++                                    inventory.cloudflare.configured
++                                        ? 'Новый API-токен Cloudflare'
++                                        : 'API-токен Cloudflare'
++                                }
++                                onChange={(event) => setCloudflareToken(event.currentTarget.value)}
++                                placeholder="Токен не отображается после сохранения"
++                                value={cloudflareToken}
++                            />
++                            <TextInput
++                                label="DNS-зона"
++                                onChange={(event) => setCloudflareZone(event.currentTarget.value)}
++                                placeholder="hambot.ru"
++                                value={cloudflareZone}
++                            />
++                        </SimpleGrid>
++                        <Button
++                            disabled={cloudflareToken.length < 20 || !cloudflareZone.trim()}
++                            leftSection={<TbShieldCheck size={17} />}
++                            loading={cloudflareBusy}
++                            onClick={connectCloudflare}
++                            variant="light"
++                        >
++                            {inventory.cloudflare.configured
++                                ? 'Проверить и заменить токен'
++                                : 'Подключить Cloudflare DNS'}
++                        </Button>
 +                        <Select
 +                            data={inventory.nodes.map((node) => ({
 +                                label: `${node.name} · ${node.address}`,
@@ -449,7 +537,7 @@ index 0000000..3ba3475
 +                            value={nodeUuid}
 +                        />
 +                        <TextInput
-+                            label="Новый IP или адрес"
++                            label="Новый IPv4 или IPv6"
 +                            onChange={(event) => {
 +                                setNewAddress(event.currentTarget.value)
 +                                setPlan(null)
@@ -490,7 +578,7 @@ index 0000000..3ba3475
 +                            <Code block>
 +                                {plan.node.oldAddress} → {plan.node.newAddress}
 +                            </Code>
-+                            <SimpleGrid cols={{ base: 1, sm: 3 }}>
++                            <SimpleGrid cols={{ base: 1, sm: 2, xl: 4 }}>
 +                                <MetricCard color="blue" label="Нод" value={plan.impact.nodes} />
 +                                <MetricCard
 +                                    color="violet"
@@ -501,6 +589,11 @@ index 0000000..3ba3475
 +                                    color="grape"
 +                                    label="Значений профиля"
 +                                    value={plan.impact.profileValues}
++                                />
++                                <MetricCard
++                                    color="teal"
++                                    label="DNS-записей"
++                                    value={plan.impact.dnsRecords}
 +                                />
 +                            </SimpleGrid>
 +                            {plan.hosts.map((host, index) => (
@@ -522,6 +615,27 @@ index 0000000..3ba3475
 +                                    title={`Профиль · ${profile.name}`}
 +                                >
 +                                    Точных вхождений IP: {profile.matches}
++                                </Alert>
++                            ))}
++                            {plan.dns.records.map((record) => (
++                                <Alert
++                                    color="teal"
++                                    icon={<TbShieldCheck size={18} />}
++                                    key={record.hostname}
++                                    title={`Cloudflare DNS only · ${record.hostname}`}
++                                    variant="light"
++                                >
++                                    <Stack gap={4}>
++                                        <Code block>
++                                            {record.oldAddress} → {record.newAddress}
++                                        </Code>
++                                        <Text c="dimmed" size="xs">
++                                            TTL: {record.newTtl} сек.
++                                            {record.proxyWasEnabled
++                                                ? ' · Cloudflare Proxy будет отключён'
++                                                : ' · Проксирование выключено'}
++                                        </Text>
++                                    </Stack>
 +                                </Alert>
 +                            ))}
 +                            {plan.warnings.map((warning) => (
@@ -1204,7 +1318,7 @@ index 0000000..3ba3475
 +    )
 +}
 diff --git a/src/shared/constants/routes.ts b/src/shared/constants/routes.ts
-index 736c59e..f89c61b 100644
+index 736c59ee157f1a756eec6985eae07c5aabef1df3..f89c61b344ebd701ec57872f84e286e19b6829eb 100644
 --- a/src/shared/constants/routes.ts
 +++ b/src/shared/constants/routes.ts
 @@ -14,6 +14,7 @@ export const ROUTES = {

@@ -6,7 +6,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .audit import AuditStore
-from .inventory import build_ip_plan, normalize_inventory, replace_paths
+from .cloudflare import CloudflareClient, CloudflareError
+from .inventory import (
+    build_ip_plan,
+    hysteria_hostnames,
+    normalize_inventory,
+    replace_paths,
+)
 from .remnawave import RemnawaveClient
 from .settings import Settings
 from .ssh import (
@@ -43,6 +49,7 @@ async def create_ip_plan(
     actor: str,
     node_uuid: str,
     new_address: str,
+    cloudflare: CloudflareClient | None = None,
 ) -> dict[str, Any]:
     try:
         new_address = str(ipaddress.ip_address(new_address.strip()))
@@ -53,6 +60,37 @@ async def create_ip_plan(
         plan = build_ip_plan(inventory, node_uuid, new_address)
     except ValueError as error:
         raise OperationError(str(error)) from error
+    hostnames = hysteria_hostnames(inventory, node_uuid)
+    plan["dns"] = {
+        "configured": bool(cloudflare and cloudflare.configured),
+        "hostnames": hostnames,
+        "records": [],
+    }
+    plan["impact"]["dnsRecords"] = 0
+    if hostnames:
+        if not cloudflare or not cloudflare.configured:
+            raise OperationError(
+                "У ноды есть домен Hysteria, но Cloudflare API не настроен. Смена IP остановлена"
+            )
+        try:
+            records = await cloudflare.plan_records(
+                hostnames,
+                plan["node"]["oldAddress"],
+                plan["node"]["newAddress"],
+            )
+        except CloudflareError as error:
+            raise OperationError(str(error)) from error
+        plan["dns"]["records"] = records
+        plan["impact"]["dnsRecords"] = len(records)
+        plan["warnings"] = [
+            warning
+            for warning in plan["warnings"]
+            if warning != "Часть хостов связана с нодой, но использует домен или другой адрес"
+        ]
+        if any(record["proxyWasEnabled"] for record in records):
+            plan["warnings"].append(
+                "Cloudflare Proxy будет отключён: Hysteria должна работать в режиме DNS only"
+            )
     operation_id = store.create("ip-change", actor, plan["node"]["name"], plan)
     return {"operationId": operation_id, **plan}
 
@@ -64,6 +102,7 @@ async def apply_ip_change(
     actor: str,
     operation_id: str,
     confirmation: str,
+    cloudflare: CloudflareClient | None = None,
 ) -> dict[str, Any]:
     operation = store.get(operation_id)
     if not operation or operation["operation_type"] != "ip-change":
@@ -87,6 +126,7 @@ async def apply_ip_change(
         "node": {"uuid": node_plan["uuid"], "address": node_plan["oldAddress"]},
         "hosts": [],
         "profiles": [],
+        "dns": [],
     }
     for item in plan["hosts"]:
         if item["willChange"] and item["uuid"] in host_by_uuid:
@@ -98,6 +138,10 @@ async def apply_ip_change(
             snapshot["profiles"].append(
                 {"uuid": item["uuid"], "config": profile_by_uuid[item["uuid"]]["config"]}
             )
+    dns_records = plan.get("dns", {}).get("records", [])
+    if dns_records and (not cloudflare or not cloudflare.configured):
+        raise OperationError("Cloudflare API недоступен. Изменения не применялись")
+    snapshot["dns"] = dns_records
     store.update(operation_id, state="applying", snapshot=snapshot)
     completed: list[str] = []
     try:
@@ -112,6 +156,14 @@ async def apply_ip_change(
             changed = replace_paths(profile["config"], item["paths"], node_plan["newAddress"])
             await client.update_profile({"uuid": item["uuid"], "config": changed})
             completed.append(f"profile:{item['uuid']}")
+        for record in dns_records:
+            await cloudflare.update_record(
+                record,
+                record["newAddress"],
+                record["newTtl"],
+                expected_address=record["oldAddress"],
+            )
+            completed.append(f"dns:{record['hostname']}")
         verify = normalize_inventory(await client.inventory())
         verified_node = next(item for item in verify["nodes"] if item["uuid"] == node_plan["uuid"])
         if verified_node["address"] != node_plan["newAddress"]:
@@ -161,10 +213,26 @@ async def apply_ip_change(
             except Exception:  # noqa: BLE001
                 restart_errors.append(node_uuid)
         restart_warning = None
+        dns_status = []
+        if cloudflare and dns_records:
+            dns_status = await asyncio.gather(
+                *[
+                    cloudflare.public_dns(record["hostname"], record["newAddress"])
+                    for record in dns_records
+                ]
+            )
+        warnings = []
         if restart_errors:
-            restart_warning = (
+            warnings.append(
                 "Изменения применены, но перезапуск части затронутых нод не подтвердился"
             )
+        pending_dns = [item["hostname"] for item in dns_status if not item["propagated"]]
+        if pending_dns:
+            warnings.append(
+                "Cloudflare обновлён, DNS-кэш ещё распространяется: " + ", ".join(pending_dns)
+            )
+        if warnings:
+            restart_warning = "; ".join(warnings)
         result = {
             "verified": True,
             "completed": completed,
@@ -172,11 +240,27 @@ async def apply_ip_change(
             "restartedNodes": restarted_nodes,
             "restartErrors": restart_errors,
             "newAddress": node_plan["newAddress"],
+            "dnsRecords": dns_status,
         }
         store.update(operation_id, state="completed", result=result)
         return result
     except Exception as error:
         rollback_errors: list[str] = []
+        if cloudflare:
+            completed_dns = {
+                step.removeprefix("dns:") for step in completed if step.startswith("dns:")
+            }
+            for record in reversed(snapshot["dns"]):
+                if record["hostname"] not in completed_dns:
+                    continue
+                try:
+                    await cloudflare.update_record(
+                        record,
+                        record["oldAddress"],
+                        record["oldTtl"],
+                    )
+                except Exception:  # noqa: BLE001
+                    rollback_errors.append(f"dns:{record['hostname']}")
         for profile in reversed(snapshot["profiles"]):
             try:
                 await client.update_profile({"uuid": profile["uuid"], "config": profile["config"]})
