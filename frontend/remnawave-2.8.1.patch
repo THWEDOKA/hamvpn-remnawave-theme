@@ -76,7 +76,7 @@ new file mode 100644
 index 0000000..3ba3475
 --- /dev/null
 +++ b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
-@@ -0,0 +1,1086 @@
+@@ -0,0 +1,1126 @@
 +import {
 +    Alert,
 +    Badge,
@@ -104,6 +104,7 @@ index 0000000..3ba3475
 +    Title
 +} from '@mantine/core'
 +import { notifications } from '@mantine/notifications'
++import axios from 'axios'
 +import { useEffect, useMemo, useState } from 'react'
 +import {
 +    TbActivityHeartbeat,
@@ -118,8 +119,9 @@ index 0000000..3ba3475
 +    TbTopologyStar3
 +} from 'react-icons/tb'
 +
-+import { instance } from '@shared/api'
 +import { LoadingScreen, Page, PageHeaderShared } from '@shared/ui'
++
++import { useToken } from '@entities/auth'
 +
 +type Summary = {
 +    connectedNodes: number
@@ -228,8 +230,14 @@ index 0000000..3ba3475
 +
 +const API_BASE = '/ham-infrastructure/api'
 +
-+const api = async <T,>(path: string, method = 'GET', body?: unknown): Promise<T> => {
-+    const response = await instance.request<T>({ method, url: `${API_BASE}${path}`, data: body })
++const api = async <T,>(token: string, path: string, method = 'GET', body?: unknown): Promise<T> => {
++    if (!token) throw new Error('Сессия панели ещё не готова. Обновите страницу.')
++    const response = await axios.request<T>({
++        data: body,
++        headers: { Authorization: `Bearer ${token}` },
++        method,
++        url: `${API_BASE}${path}`
++    })
 +    return response.data
 +}
 +
@@ -358,7 +366,15 @@ index 0000000..3ba3475
 +    )
 +}
 +
-+function IpChangeView({ inventory, onComplete }: { inventory: Inventory; onComplete: () => void }) {
++function IpChangeView({
++    inventory,
++    onComplete,
++    token
++}: {
++    inventory: Inventory
++    onComplete: () => void
++    token: string
++}) {
 +    const [nodeUuid, setNodeUuid] = useState<string | null>(null)
 +    const [newAddress, setNewAddress] = useState('')
 +    const [confirmation, setConfirmation] = useState('')
@@ -369,7 +385,7 @@ index 0000000..3ba3475
 +        if (!nodeUuid || !newAddress.trim()) return
 +        setBusy(true)
 +        try {
-+            const result = await api<IpPlan>('/ip-change/plan', 'POST', {
++            const result = await api<IpPlan>(token, '/ip-change/plan', 'POST', {
 +                nodeUuid,
 +                newAddress: newAddress.trim()
 +            })
@@ -388,6 +404,7 @@ index 0000000..3ba3475
 +        setBusy(true)
 +        try {
 +            const result = await api<{ newAddress: string; warning?: string }>(
++                token,
 +                '/ip-change/apply',
 +                'POST',
 +                { operationId: plan.operationId, confirmation }
@@ -541,7 +558,15 @@ index 0000000..3ba3475
 +    )
 +}
 +
-+function NodeAddView({ inventory, onComplete }: { inventory: Inventory; onComplete: () => void }) {
++function NodeAddView({
++    inventory,
++    onComplete,
++    token
++}: {
++    inventory: Inventory
++    onComplete: () => void
++    token: string
++}) {
 +    const [ssh, setSsh] = useState<SshForm>({
 +        host: '',
 +        password: '',
@@ -583,7 +608,9 @@ index 0000000..3ba3475
 +    const checkSsh = async () => {
 +        setBusy(true)
 +        try {
-+            const result = await api<SshCheck>('/node-add/ssh-preflight', 'POST', { ssh })
++            const result = await api<SshCheck>(token, '/node-add/ssh-preflight', 'POST', {
++                ssh
++            })
 +            if (result.existingNode) throw new Error('На сервере уже установлена Remnawave Node')
 +            setSshCheck(result)
 +            setPlan(null)
@@ -605,7 +632,7 @@ index 0000000..3ba3475
 +        }
 +        setBusy(true)
 +        try {
-+            const result = await api<NodePlan>('/node-add/plan', 'POST', { node, host })
++            const result = await api<NodePlan>(token, '/node-add/plan', 'POST', { node, host })
 +            setPlan(result)
 +            setConfirmation('')
 +            notifications.show({ color: 'blue', message: 'План установки сформирован' })
@@ -620,7 +647,7 @@ index 0000000..3ba3475
 +        if (!plan || !sshCheck) return
 +        setBusy(true)
 +        try {
-+            const result = await api<{ nodeUuid: string }>('/node-add/apply', 'POST', {
++            const result = await api<{ nodeUuid: string }>(token, '/node-add/apply', 'POST', {
 +                confirmation,
 +                expectedFingerprint: sshCheck.fingerprint,
 +                operationId: plan.operationId,
@@ -1046,16 +1073,18 @@ index 0000000..3ba3475
 +}
 +
 +export function InfrastructurePage() {
++    const token = useToken()
 +    const [inventory, setInventory] = useState<Inventory | null>(null)
 +    const [operations, setOperations] = useState<Operation[]>([])
 +    const [loading, setLoading] = useState(true)
 +
 +    const load = async (quiet = false) => {
++        if (!token) return
 +        if (!quiet) setLoading(true)
 +        try {
 +            const [inventoryResult, operationsResult] = await Promise.all([
-+                api<Inventory>('/inventory'),
-+                api<{ operations: Operation[] }>('/operations')
++                api<Inventory>(token, '/inventory'),
++                api<{ operations: Operation[] }>(token, '/operations')
 +            ])
 +            setInventory(inventoryResult)
 +            setOperations(operationsResult.operations)
@@ -1067,8 +1096,14 @@ index 0000000..3ba3475
 +    }
 +
 +    useEffect(() => {
++        if (!token) {
++            return
++        }
 +        let cancelled = false
-+        Promise.all([api<Inventory>('/inventory'), api<{ operations: Operation[] }>('/operations')])
++        Promise.all([
++            api<Inventory>(token, '/inventory'),
++            api<{ operations: Operation[] }>(token, '/operations')
++        ])
 +            .then(([inventoryResult, operationsResult]) => {
 +                if (cancelled) return
 +                setInventory(inventoryResult)
@@ -1085,7 +1120,7 @@ index 0000000..3ba3475
 +        return () => {
 +            cancelled = true
 +        }
-+    }, [])
++    }, [token])
 +
 +    const statusText = useMemo(() => {
 +        if (!inventory) return 'Получаем данные'
@@ -1146,12 +1181,17 @@ index 0000000..3ba3475
 +                            />
 +                        </Tabs.Panel>
 +                        <Tabs.Panel pt="lg" value="node-add">
-+                            <NodeAddView inventory={inventory} onComplete={() => void load(true)} />
++                            <NodeAddView
++                                inventory={inventory}
++                                onComplete={() => void load(true)}
++                                token={token}
++                            />
 +                        </Tabs.Panel>
 +                        <Tabs.Panel pt="lg" value="ip-change">
 +                            <IpChangeView
 +                                inventory={inventory}
 +                                onComplete={() => void load(true)}
++                                token={token}
 +                            />
 +                        </Tabs.Panel>
 +                        <Tabs.Panel pt="lg" value="history">

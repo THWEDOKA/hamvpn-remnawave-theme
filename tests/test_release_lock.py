@@ -20,3 +20,11 @@ def test_frontend_is_pinned_and_infrastructure_is_native():
     assert "VERSION=2.8.1" not in dockerfile
     assert "/dashboard/management/infrastructure" in patch
     assert "InfrastructurePage" in patch
+
+
+def test_infrastructure_uses_live_session_without_global_logout_interceptor():
+    patch = (ROOT / "frontend" / "remnawave-2.8.1.patch").read_text(encoding="utf-8")
+    assert "import axios from 'axios'" in patch
+    assert "import { useToken } from '@entities/auth'" in patch
+    assert "headers: { Authorization: `Bearer ${token}` }" in patch
+    assert "import { instance } from '@shared/api'" not in patch
