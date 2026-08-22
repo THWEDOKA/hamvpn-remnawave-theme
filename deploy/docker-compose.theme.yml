@@ -9,7 +9,7 @@ services:
       remnawave:
         condition: service_healthy
     environment:
-      REMNAWAVE_BASE_URL: https://goszapravki.com
+      REMNAWAVE_BASE_URL: http://remnawave:3000
       TRUSTED_ORIGIN: https://goszapravki.com
       INFRA_DATA_DIR: /data
       PANEL_PUBLIC_IP: ${PANEL_PUBLIC_IP:?Set PANEL_PUBLIC_IP in /opt/remnawave/.env}

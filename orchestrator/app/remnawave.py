@@ -23,6 +23,9 @@ class RemnawaveClient:
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json",
+            "X-Remnawave-Client-Type": "browser",
+            "X-Forwarded-For": "127.0.0.1",
+            "X-Forwarded-Proto": "https",
         }
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -57,16 +60,16 @@ class RemnawaveClient:
         return payload.get("response", payload)
 
     async def validate(self) -> list[dict[str, Any]]:
-        result = await self.request("GET", "/api/nodes")
+        result = await self.request("GET", "/api/nodes/")
         if not isinstance(result, list):
             raise RemnawaveError("Неожиданный формат списка нод")
         return result
 
     async def inventory(self) -> dict[str, Any]:
         nodes = await self.validate()
-        hosts = await self.request("GET", "/api/hosts")
-        profiles = await self.request("GET", "/api/config-profiles")
-        squads = await self.request("GET", "/api/internal-squads")
+        hosts = await self.request("GET", "/api/hosts/")
+        profiles = await self.request("GET", "/api/config-profiles/")
+        squads = await self.request("GET", "/api/internal-squads/")
         return {
             "nodes": nodes if isinstance(nodes, list) else [],
             "hosts": hosts if isinstance(hosts, list) else [],
@@ -75,10 +78,10 @@ class RemnawaveClient:
         }
 
     async def update_node(self, body: dict[str, Any]) -> Any:
-        return await self.request("PATCH", "/api/nodes", body)
+        return await self.request("PATCH", "/api/nodes/", body)
 
     async def create_node(self, body: dict[str, Any]) -> Any:
-        return await self.request("POST", "/api/nodes", body)
+        return await self.request("POST", "/api/nodes/", body)
 
     async def delete_node(self, uuid: str) -> Any:
         return await self.request("DELETE", f"/api/nodes/{uuid}")
@@ -87,20 +90,19 @@ class RemnawaveClient:
         return await self.request("POST", f"/api/nodes/{uuid}/actions/restart", {})
 
     async def update_host(self, body: dict[str, Any]) -> Any:
-        return await self.request("PATCH", "/api/hosts", body)
+        return await self.request("PATCH", "/api/hosts/", body)
 
     async def create_host(self, body: dict[str, Any]) -> Any:
-        return await self.request("POST", "/api/hosts", body)
+        return await self.request("POST", "/api/hosts/", body)
 
     async def delete_host(self, uuid: str) -> Any:
         return await self.request("DELETE", f"/api/hosts/{uuid}")
 
     async def update_profile(self, body: dict[str, Any]) -> Any:
-        return await self.request("PATCH", "/api/config-profiles", body)
+        return await self.request("PATCH", "/api/config-profiles/", body)
 
     async def secret_key(self) -> str:
-        result = await self.request("GET", "/api/keygen")
+        result = await self.request("GET", "/api/keygen/")
         if not isinstance(result, dict) or not result.get("pubKey"):
             raise RemnawaveError("Панель не выдала ключ ноды")
         return str(result["pubKey"])
-
