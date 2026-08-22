@@ -9,9 +9,11 @@ from orchestrator.app.remnawave import RemnawaveClient
 class FakeResponse:
     status_code = 200
 
-    @staticmethod
-    def json() -> dict[str, Any]:
-        return {"response": []}
+    def __init__(self, payload: Any = None):
+        self.payload = [] if payload is None else payload
+
+    def json(self) -> dict[str, Any]:
+        return {"response": self.payload}
 
 
 class FakeAsyncClient:
@@ -28,6 +30,24 @@ class FakeAsyncClient:
         request = {"method": method, "path": path, **kwargs}
         self.captured.setdefault("requests", []).append(request)
         self.captured.update(request)
+        if path == "/api/config-profiles/":
+            return FakeResponse(
+                {
+                    "total": 1,
+                    "configProfiles": [
+                        {"uuid": "profile-1", "name": "BASE", "config": {}}
+                    ],
+                }
+            )
+        if path == "/api/config-profiles/profile-1":
+            return FakeResponse(
+                {
+                    "uuid": "profile-1",
+                    "name": "BASE",
+                    "config": {"outbounds": [{"address": "192.0.2.1"}]},
+                    "inbounds": [],
+                }
+            )
         return FakeResponse()
 
 
@@ -66,5 +86,37 @@ def test_collection_paths_match_remnawave_281_contract(monkeypatch):
         "/api/nodes/",
         "/api/hosts/",
         "/api/config-profiles/",
+        "/api/config-profiles/profile-1",
         "/api/internal-squads/",
     ]
+
+
+def test_inventory_hydrates_profile_details(monkeypatch):
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: FakeAsyncClient(captured, **kwargs),
+    )
+
+    inventory = asyncio.run(RemnawaveClient("http://remnawave:3000", "c" * 32).inventory())
+
+    assert inventory["profiles"][0]["config"]["outbounds"][0]["address"] == "192.0.2.1"
+
+
+def test_restart_body_matches_remnawave_281_contract(monkeypatch):
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: FakeAsyncClient(captured, **kwargs),
+    )
+
+    asyncio.run(
+        RemnawaveClient("http://remnawave:3000", "d" * 32).restart_node(
+            "node-1", force_restart=False
+        )
+    )
+
+    assert captured["path"] == "/api/nodes/node-1/actions/restart"
+    assert captured["json"] == {"forceRestart": False}

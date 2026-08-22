@@ -116,15 +116,61 @@ async def apply_ip_change(
         verified_node = next(item for item in verify["nodes"] if item["uuid"] == node_plan["uuid"])
         if verified_node["address"] != node_plan["newAddress"]:
             raise OperationError("Проверка после применения не подтвердила новый IP")
+        for item in plan["hosts"]:
+            if not item["willChange"]:
+                continue
+            verified_host = next(
+                (host for host in verify["hosts"] if host["uuid"] == item["uuid"]),
+                None,
+            )
+            if not verified_host or verified_host["address"] != node_plan["newAddress"]:
+                raise OperationError("Проверка после применения не подтвердила адрес хоста")
+        for item in plan["profiles"]:
+            verified_profile = next(
+                (profile for profile in verify["profiles"] if profile["uuid"] == item["uuid"]),
+                None,
+            )
+            if not verified_profile:
+                raise OperationError("Проверка после применения не нашла изменённый профиль")
+            for path in item["paths"]:
+                cursor: Any = verified_profile["config"]
+                try:
+                    for part in path:
+                        cursor = cursor[part]
+                except (KeyError, IndexError, TypeError) as error:
+                    raise OperationError(
+                        "Проверка после применения не нашла изменённое поле профиля"
+                    ) from error
+                if cursor != node_plan["newAddress"]:
+                    raise OperationError("Проверка после применения не подтвердила профиль")
+
+        changed_profile_uuids = {item["uuid"] for item in plan["profiles"]}
+        restart_node_uuids: list[str] = []
+        for item in verify["nodes"]:
+            should_restart = item["uuid"] == node_plan["uuid"] or (
+                item.get("profileUuid") in changed_profile_uuids
+            )
+            if should_restart and not item.get("isDisabled") and item["uuid"] not in restart_node_uuids:
+                restart_node_uuids.append(item["uuid"])
+        restart_errors: list[str] = []
+        restarted_nodes: list[str] = []
+        for node_uuid in restart_node_uuids:
+            try:
+                await client.restart_node(node_uuid, force_restart=False)
+                restarted_nodes.append(node_uuid)
+            except Exception:  # noqa: BLE001
+                restart_errors.append(node_uuid)
         restart_warning = None
-        try:
-            await client.restart_node(node_plan["uuid"])
-        except Exception:  # noqa: BLE001
-            restart_warning = "IP применён, но команда перезапуска ноды не подтвердилась"
+        if restart_errors:
+            restart_warning = (
+                "Изменения применены, но перезапуск части затронутых нод не подтвердился"
+            )
         result = {
             "verified": True,
             "completed": completed,
             "warning": restart_warning,
+            "restartedNodes": restarted_nodes,
+            "restartErrors": restart_errors,
             "newAddress": node_plan["newAddress"],
         }
         store.update(operation_id, state="completed", result=result)

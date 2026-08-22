@@ -57,7 +57,7 @@ class FakeClient:
     def __init__(self, fail_profile_once: bool = False):
         self.data = raw_inventory()
         self.fail_profile_once = fail_profile_once
-        self.restarted = False
+        self.restarted: list[tuple[str, bool]] = []
 
     async def inventory(self):
         return deepcopy(self.data)
@@ -80,8 +80,8 @@ class FakeClient:
         profile["config"] = deepcopy(body["config"])
         return deepcopy(profile)
 
-    async def restart_node(self, _uuid):
-        self.restarted = True
+    async def restart_node(self, uuid, force_restart=False):
+        self.restarted.append((uuid, force_restart))
 
 
 def test_ip_change_applies_and_verifies(tmp_path: Path, monkeypatch):
@@ -101,8 +101,40 @@ def test_ip_change_applies_and_verifies(tmp_path: Path, monkeypatch):
     assert client.data["nodes"][0]["address"] == "192.0.2.20"
     assert client.data["hosts"][0]["address"] == "192.0.2.20"
     assert client.data["profiles"]["configProfiles"][0]["config"]["route"]["address"] == "192.0.2.20"
-    assert client.restarted is True
+    assert client.restarted == [("node-1", False)]
     assert store.get(plan["operationId"])["state"] == "completed"
+
+
+def test_ip_change_restarts_nodes_using_changed_profile(tmp_path: Path, monkeypatch):
+    async def no_tcp_check(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("orchestrator.app.operations.tcp_check", no_tcp_check)
+    client = FakeClient()
+    client.data["nodes"].append(
+        {
+            "uuid": "bridge-node",
+            "name": "Whitelist bridge",
+            "address": "198.51.100.20",
+            "port": 2222,
+            "countryCode": "RU",
+            "isConnected": True,
+            "configProfile": {
+                "activeConfigProfileUuid": "profile-1",
+                "activeInbounds": ["inbound-1"],
+            },
+        }
+    )
+    store = AuditStore(tmp_path)
+    plan = asyncio.run(create_ip_plan(client, store, "actor", "node-1", "192.0.2.20"))
+    settings = Settings("", "", tmp_path, "198.51.100.1", "image", 900, 1)
+
+    result = asyncio.run(
+        apply_ip_change(client, store, settings, "actor", plan["operationId"], "Germany-4")
+    )
+
+    assert client.restarted == [("node-1", False), ("bridge-node", False)]
+    assert result["restartErrors"] == []
 
 
 def test_ip_change_rolls_back_on_profile_failure(tmp_path: Path, monkeypatch):
@@ -145,4 +177,3 @@ def test_node_plan_rejects_unknown_squad(tmp_path: Path):
     }
     with pytest.raises(OperationError, match="существующий сквад"):
         asyncio.run(create_node_plan(client, store, "actor", body))
-

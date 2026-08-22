@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -65,10 +66,35 @@ class RemnawaveClient:
             raise RemnawaveError("Неожиданный формат списка нод")
         return result
 
+    @staticmethod
+    def _collection(value: Any, *keys: str) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            for key in keys:
+                items = value.get(key)
+                if isinstance(items, list):
+                    return [item for item in items if isinstance(item, dict)]
+        return []
+
+    async def config_profiles(self) -> list[dict[str, Any]]:
+        collection = await self.request("GET", "/api/config-profiles/")
+        summaries = self._collection(collection, "configProfiles", "profiles", "items")
+        requests = [
+            self.request("GET", f"/api/config-profiles/{item['uuid']}")
+            for item in summaries
+            if item.get("uuid")
+        ]
+        details = await asyncio.gather(*requests)
+        profiles = [item for item in details if isinstance(item, dict)]
+        if len(profiles) != len(summaries):
+            raise RemnawaveError("Remnawave вернула неполный список профилей")
+        return profiles
+
     async def inventory(self) -> dict[str, Any]:
         nodes = await self.validate()
         hosts = await self.request("GET", "/api/hosts/")
-        profiles = await self.request("GET", "/api/config-profiles/")
+        profiles = await self.config_profiles()
         squads = await self.request("GET", "/api/internal-squads/")
         return {
             "nodes": nodes if isinstance(nodes, list) else [],
@@ -86,8 +112,12 @@ class RemnawaveClient:
     async def delete_node(self, uuid: str) -> Any:
         return await self.request("DELETE", f"/api/nodes/{uuid}")
 
-    async def restart_node(self, uuid: str) -> Any:
-        return await self.request("POST", f"/api/nodes/{uuid}/actions/restart", {})
+    async def restart_node(self, uuid: str, force_restart: bool = False) -> Any:
+        return await self.request(
+            "POST",
+            f"/api/nodes/{uuid}/actions/restart",
+            {"forceRestart": force_restart},
+        )
 
     async def update_host(self, body: dict[str, Any]) -> Any:
         return await self.request("PATCH", "/api/hosts/", body)
