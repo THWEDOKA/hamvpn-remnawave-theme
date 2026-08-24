@@ -22,6 +22,15 @@ def test_frontend_is_pinned_and_infrastructure_is_native():
     assert "InfrastructurePage" in patch
 
 
+def test_default_panel_design_is_not_overridden():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    compose = (ROOT / "deploy" / "docker-compose.theme.yml").read_text(encoding="utf-8")
+    assert "hamvpn-theme.css" not in dockerfile
+    assert "hamvpn-mascot.png" not in dockerfile
+    assert "install-hamvpn-theme" not in dockerfile
+    assert "hamvpn/remnawave:2-default-infra" in compose
+
+
 def test_infrastructure_uses_live_session_without_global_logout_interceptor():
     patch = (ROOT / "frontend" / "remnawave-2.8.1.patch").read_text(encoding="utf-8")
     assert "import axios from 'axios'" in patch

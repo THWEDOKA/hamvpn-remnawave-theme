@@ -1,6 +1,6 @@
 services:
   remnawave:
-    image: hamvpn/remnawave:2-theme
+    image: hamvpn/remnawave:2-default-infra
 
   hamvpn-infrastructure:
     image: hamvpn/remnawave-infrastructure:1

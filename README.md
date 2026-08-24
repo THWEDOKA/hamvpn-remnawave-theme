@@ -1,15 +1,11 @@
-# HAMVPN Remnawave Theme & Infrastructure
+# HAMVPN Remnawave Infrastructure
 
-Тонкая визуальная надстройка и изолированный операторский модуль для текущего production-образа Remnawave. Они не обновляют backend Remnawave, не запускают его миграции и не меняют схему его базы данных.
+Нативная вкладка управления инфраструктурой для текущего production-образа Remnawave. Сборка сохраняет штатный дизайн панели, не обновляет backend Remnawave, не запускает его миграции и не меняет схему его базы данных.
 
 ## Что меняется
 
-- глубокий фиолетовый фон панели;
-- фирменный маскот HAMVPN на прозрачном фоне;
-- полупрозрачные верхняя панель и навигация;
-- название вкладки и цвет системной темы;
 - нативная вкладка `Инфраструктура` внутри React-интерфейса Remnawave;
-- постоянная ссылка на исходный код темы для соблюдения AGPL-3.0.
+- штатное визуальное оформление Remnawave без пользовательского CSS и фоновых изображений.
 
 ## Инфраструктура
 
@@ -32,7 +28,7 @@ SSH host key фиксируется на этапе предварительно
 ```bash
 docker build --pull=false \
   --build-arg VCS_REF="$(git rev-parse HEAD)" \
-  -t hamvpn/remnawave:2-theme .
+  -t hamvpn/remnawave:2-default-infra .
 ```
 
 Операторский контейнер собирается отдельно:
@@ -48,11 +44,9 @@ docker build --pull=false \
 ## Проверка
 
 ```bash
-docker run --rm --entrypoint sh hamvpn/remnawave:2-theme -lc \
-  "test -s /opt/app/frontend/hamvpn/hamvpn-mascot.png && \
-   grep -q /dashboard/management/infrastructure /opt/app/frontend/assets/index-*.js && \
-   grep -q /hamvpn/hamvpn-theme.css /opt/app/frontend/index.html && \
-   grep -q hamvpn-source-link /opt/app/frontend/index.html"
+docker run --rm --entrypoint sh hamvpn/remnawave:2-default-infra -lc \
+  "grep -q /dashboard/management/infrastructure /opt/app/frontend/assets/index-*.js && \
+   ! grep -q /hamvpn/hamvpn-theme.css /opt/app/frontend/index.html"
 ```
 
 Production запускается с дополнительным Compose-файлом `deploy/docker-compose.theme.yml`. Исходный Compose Remnawave при этом остаётся неизменным.
@@ -87,4 +81,4 @@ install -d -o 10001 -g 10001 -m 700 /opt/hamvpn-infrastructure
 
 ## Лицензия
 
-Тема распространяется по GNU Affero General Public License v3.0. Базовый Remnawave также распространяется по AGPL-3.0.
+Модуль распространяется по GNU Affero General Public License v3.0. Базовый Remnawave также распространяется по AGPL-3.0.
