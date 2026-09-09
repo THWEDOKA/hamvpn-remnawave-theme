@@ -114,6 +114,7 @@ def probe():
             print(json.dumps({'runtime_user_removed': cleanup.returncode == 0,
                               'diagnostic_client_stopped': client is None or client.poll() is not None}), flush=True)
             if added and cleanup.returncode:
+                print(json.dumps({'manual_cleanup_email': canary_email, 'inbound_tag': inbound['tag']}), flush=True)
                 raise RuntimeError('Runtime test user cleanup failed; manual removal required.')
 
 
