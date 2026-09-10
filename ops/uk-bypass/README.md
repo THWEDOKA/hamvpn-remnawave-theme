@@ -1,5 +1,10 @@
 # HAMVPN UK bypass firewall repair — 2026-09-09
 
+For the separate, unresolved September 10 recurrence, see
+[the incident report](incident-2026-09-10.md). The firewall repair below
+remains in place; its historical recovery results are not a current
+availability guarantee.
+
 ## Confirmed fault
 
 The HAMVPN host «🇬🇧 Обход все операторы» uses the existing route:
