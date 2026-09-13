@@ -1,0 +1,53 @@
+diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -36,6 +36,7 @@ func main() {
+ 	flag.StringVar(&maxUid, "maxUid", "", "MAX call user id. If u use MAX transport")
+ 	flag.StringVar(&localIP, "local-ip", "", "Egress IP for exit node (raw mode only, scoped RST drop)")
++	urlFile := flag.String("url-file", "", "Read the private document URL from a file, not process arguments")
+ 	encryptionKeyFile := flag.String("encryption-key-file", "",
+ 		"Optional: encrypt the transport with AES-256-GCM using a shared secret read from this file. "+
+ 			"Both peers must use the same secret; unset means unencrypted, unchanged behavior")
+ 	flag.Parse()
+ 
++	if *urlFile != "" {
++		value, err := os.ReadFile(*urlFile)
++		if err != nil {
++			log.Fatal("Cannot read document URL file")
++		}
++		globalDocUrl = strings.TrimSpace(string(value))
++		if !strings.HasPrefix(globalDocUrl, "https://") {
++			log.Fatal("Document URL must use HTTPS")
++		}
++	}
+ 	exitMode, err := tunnel.ParseExitMode(*mode)
+diff --git a/tunnel/tunnel.go b/tunnel/tunnel.go
+--- a/tunnel/tunnel.go
++++ b/tunnel/tunnel.go
+@@ -146,6 +146,10 @@ func (t *TCPTunnel) handleExitTCP(r *tcp.ForwarderRequest) {
+ 	id := r.ID()
++	if !allowedExitAddress(id.LocalAddress.String()) {
++		r.Complete(true)
++		return
++	}
+ 	dest := fmt.Sprintf("%s:%d", id.LocalAddress.String(), id.LocalPort)
+ 
+ 	var wq waiter.Queue
+diff --git a/transport/yandex/vyandex.go b/transport/yandex/vyandex.go
+--- a/transport/yandex/vyandex.go
++++ b/transport/yandex/vyandex.go
+@@ -57,13 +57,13 @@ func DefaultVolgaConfig() VolgaConfig {
+ 	return VolgaConfig{
+-		MaxIdleConnsPerHost: 2000,
+-		MaxIdleConns:        4000,
++		MaxIdleConnsPerHost: 32,
++		MaxIdleConns:        64,
+ 		IdleConnTimeout:     90 * time.Second,
+ 		RelayTimeout:        30 * time.Second,
+ 
+-		WorkerCount: 2000,
+-		QueueSize:   1000000,
++		WorkerCount: 32,
++		QueueSize:   2048,
+ 
+ 		BatchSize:     20,

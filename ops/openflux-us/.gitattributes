@@ -1,0 +1,2 @@
+# Unified patch context contains a space before source-code tabs by design.
+openflux.patch -whitespace

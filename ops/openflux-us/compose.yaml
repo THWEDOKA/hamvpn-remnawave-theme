@@ -1,0 +1,32 @@
+name: hamvpn-openflux-us
+services:
+  exit-node:
+    build: .
+    image: hamvpn/openflux-us:7835b71-pilot1
+    container_name: hamvpn-openflux-us
+    network_mode: bridge
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: "on-failure:3"
+    cpus: 1.0
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
+    environment:
+      GOMAXPROCS: "2"
+      GOMEMLIMIT: 512MiB
+      OPENFLUX_DENY_IPS: "162.141.185.219 62.144.56.247 62.144.56.240 62.144.56.253"
+    volumes:
+      - type: bind
+        source: /etc/hamvpn-openflux-us/document-url
+        target: /run/secrets/document-url
+        read_only: true
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"

@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!openflux.patch
+!exit_policy.go
+!exit_policy_test.go
