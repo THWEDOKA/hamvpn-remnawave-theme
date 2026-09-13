@@ -5,6 +5,11 @@ ROOT = Path(__file__).parent
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_linux_release_has_explicit_lf_policy(self):
+        self.assertIn('* text eol=lf', (ROOT / '.gitattributes').read_text())
+        for name in ['Dockerfile', 'compose.yaml', 'openflux.patch']:
+            self.assertNotIn(b'\r', (ROOT / name).read_bytes())
+
     def test_container_is_unprivileged_and_does_not_publish_ports(self):
         config = (ROOT / 'compose.yaml').read_text()
         for required in ['network_mode: bridge', 'user: "65534:65534"',

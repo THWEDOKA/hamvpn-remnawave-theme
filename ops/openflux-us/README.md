@@ -58,4 +58,36 @@ Run `docker compose stop exit-node` in this release directory. It stops only
 the separate OpenFlux pilot. Do not reset the host firewall or restart
 Remnawave. Keep the release, image and root-only channel file for diagnosis.
 
-Status: deployment/testing pending; no availability or all-operator claim.
+## Verified deployment: 2026-09-14 (Europe/Minsk)
+
+- Deployed from GitHub commit `07599f2004ed21d0a12a0b688010934251aebd8f`.
+  Image ID: `sha256:ae0ac0502a8da54c5d9ca611bd2c6d8ef5cec5e575c9825345750f213636209f`.
+- Full Go tests passed on Windows and during the Linux image build. Deployment
+  configuration tests passed. Explicit LF attributes fix Windows-to-Linux
+  archive conversion; the initial failed build never started a container.
+- Independent Windows client -> Volga document -> GASAN US -> HTTPS passed:
+  Cloudflare trace reported `162.141.185.219`; example.com returned its expected
+  content; DNS-over-HTTPS returned a real IPv4 address. Individual HTTPS probes
+  took 0.51-0.88 seconds after transport startup, not a throughput benchmark.
+- DNS-over-TLS queries through the tunnel passed with certificate verification
+  for Google and Cloudflare. Yandex DoT failed in the local Python probe with
+  `unable to get local issuer certificate`; verification was not disabled.
+  This does not establish the iPhone's trust-store behavior.
+- Initial domain-name probes failed because the workstation's resolver supplied
+  fake addresses in `198.18.0.0/15`, correctly denied by the exit policy. Repeating
+  with real addresses obtained through encrypted DNS passed.
+- All temporary probe clients were stopped before handing the channel to the
+  iPhone. The exit container is running without restart or OOM; observed idle
+  memory was about 13 MiB. This is not a long-duration stability test.
+- Existing Remnawave container ID, start time, PID and zero restart count are
+  unchanged; Xray still listens on 443. Existing firewall rules are preserved.
+  Docker added only its standard raw-table ingress protection for the new
+  bridge container at `172.17.0.2`; there are no published ports or RST rules.
+- Root-only pre-deployment snapshot is stored at
+  `/opt/hamvpn-openflux-us/backups/pre-openflux/` and was read-back verified.
+
+iPhone handoff: select **VOLGA**, use the owner's same document with the
+`disk.yandex.ru` hostname, keep DNS **Default**, stop other VPNs, then use the
+lower **Start VPN** button. Test Wi-Fi first, then mobile data with Wi-Fi off.
+Do not publish the document URL. iPhone compatibility and operation under active
+Russian mobile allowlists still require the owner's test; no all-operator claim.
