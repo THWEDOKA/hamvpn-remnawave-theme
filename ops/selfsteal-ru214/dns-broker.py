@@ -1,10 +1,14 @@
 """Root-only Cloudflare broker: one fixed ACME TXT name, no caller-selected paths."""
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import shlex
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -71,11 +75,55 @@ class Cloudflare:
         return payload['result']
 
 
+def authoritative_propagation(value, nameservers):
+    """Check both zone-authoritative servers; node separately checks public caches."""
+    if not isinstance(nameservers, list) or len(nameservers) != 2 or len(set(nameservers)) != 2:
+        raise RemoteError('Unexpected authoritative server list')
+    addresses = {}
+    for name in nameservers:
+        if not re.fullmatch(r'[a-z0-9-]+\.ns\.cloudflare\.com', name):
+            raise RemoteError('Unexpected authoritative server name')
+        result = subprocess.run(['/usr/bin/dig', '@8.8.8.8', name, 'A', '+short', '+time=2', '+tries=1'],
+                                capture_output=True, text=True, timeout=4, check=True)
+        candidates = []
+        for line in result.stdout.splitlines():
+            try: address = ipaddress.IPv4Address(line.strip())
+            except ValueError: continue
+            if address.is_global: candidates.append(str(address))
+        if not candidates or len(candidates) > 8:
+            raise RemoteError('Authoritative server address lookup failed')
+        addresses[name] = candidates
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        confirmed = set()
+        for name, candidates in addresses.items():
+            for address in candidates:
+                if time.monotonic() >= deadline: break
+                try:
+                    result = subprocess.run(['/usr/bin/dig', '@' + address, NAME, 'TXT',
+                        '+time=2', '+tries=1', '+norecurse', '+noall', '+comments', '+answer'],
+                        capture_output=True, text=True, timeout=4, check=True)
+                    if not re.search(r';; flags: [^;\n]*\baa\b', result.stdout): continue
+                    for line in result.stdout.splitlines():
+                        fields = line.split(None, 4)
+                        if (len(fields) == 5 and fields[0].rstrip('.') == NAME
+                                and fields[2:4] == ['IN', 'TXT']
+                                and ''.join(shlex.split(fields[4])) == value):
+                            confirmed.add(name)
+                    if name in confirmed: break
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    continue
+        if len(confirmed) == 2: return
+        time.sleep(5)
+    raise RemoteError('Authoritative TXT propagation not confirmed')
+
+
 class Broker:
-    def __init__(self, api, zone, state, save):
+    def __init__(self, api, zone, state, save, propagate=None):
         if not re.fullmatch(r'[0-9a-f]{32}', zone):
             raise ValueError('Invalid fixed zone')
         self.api, self.state, self.save = api, state, save
+        self.propagate = propagate
         self.path = '/zones/' + zone + '/dns_records'
 
     def records(self):
@@ -127,7 +175,9 @@ class Broker:
             self.state[key] = {'status': 'created', 'comment': comment, 'record_id': record_id}
             self.save(self.state)
             self.validate_record(self.api('GET', self.path + '/' + record_id), value, comment)
-            return {'ok': True, 'record_id': record_id}
+            if self.propagate:
+                self.propagate(value)
+            return {'ok': True, 'record_id': record_id, 'propagated': self.propagate is not None}
         if not intent:
             return {'ok': True, 'removed': False}
         record_id = intent.get('record_id')
@@ -177,7 +227,8 @@ def main():
         state_file = STATE / 'records.json'
         state = json.loads(state_file.read_text()) if state_file.exists() else {}
         broker = Broker(Cloudflare(config['token']), config['zone_id'], state,
-                        lambda value: atomic_json(state_file, value))
+                        lambda value: atomic_json(state_file, value),
+                        lambda value: authoritative_propagation(value, config['name_servers']))
         print(json.dumps(broker.execute(request['action'], request['validation'])))
 
 

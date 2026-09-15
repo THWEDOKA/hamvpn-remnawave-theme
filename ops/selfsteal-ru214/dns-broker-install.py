@@ -65,6 +65,10 @@ def main():
     zones = broker.Cloudflare(token)('GET', '/zones?name=torcalc.ru')
     assert len(zones) == 1 and zones[0]['name'] == 'torcalc.ru'
     zone = zones[0]['id']; assert re.fullmatch(r'[0-9a-f]{32}', zone)
+    nameservers = zones[0]['name_servers']
+    assert isinstance(nameservers, list) and len(nameservers) == 2 and len(set(nameservers)) == 2
+    assert all(re.fullmatch(r'[a-z0-9-]+\.ns\.cloudflare\.com', value) for value in nameservers)
+    assert Path('/usr/bin/dig').is_file()
     run('/usr/sbin/sshd', '-t'); run('/usr/sbin/visudo', '-c')
     before = effective('root')
     STATE.mkdir(mode=0o700)
@@ -73,7 +77,7 @@ def main():
             archive.add(path, arcname=path.lstrip('/'))
     (STATE / 'SHA256SUMS').write_text(hashlib.sha256((STATE / 'before.tar.gz').read_bytes()).hexdigest() + '  before.tar.gz\n')
     ROOT.mkdir(mode=0o700)
-    broker.atomic_json(ROOT / 'credentials.json', {'token': token, 'zone_id': zone})
+    broker.atomic_json(ROOT / 'credentials.json', {'token': token, 'zone_id': zone, 'name_servers': nameservers})
     token = None; payload = None
     LIB.mkdir(mode=0o755)
     script = LIB / 'broker.py'; script.write_bytes(Path(__file__).with_name('dns-broker.py').read_bytes()); script.chmod(0o644)

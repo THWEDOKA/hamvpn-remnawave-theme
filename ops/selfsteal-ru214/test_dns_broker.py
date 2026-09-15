@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('dns_broker', ROOT / 'dns-broker.py')
@@ -108,6 +109,29 @@ class DNSBrokerTests(unittest.TestCase):
         self.assertIn("/usr/bin/python3 -I /usr/local/lib/hamvpn-dns-ru214/broker.py", source)
         self.assertLess(source.index("run('systemctl', 'reload', 'ssh')"), source.index('KEY.write_bytes'))
         self.assertLess(source.index('if KEY.exists(): KEY.replace'), source.index('if CONF.exists(): CONF.unlink'))
+
+    def test_propagation_claim_requires_successful_check(self):
+        called = []
+        self.broker.propagate = called.append
+        self.assertTrue(self.broker.execute('present', VALUE)['propagated'])
+        self.assertEqual(called, [VALUE])
+        self.broker.propagate = lambda value: (_ for _ in ()).throw(module.RemoteError('Not propagated'))
+        with self.assertRaises(module.RemoteError): self.broker.execute('present', VALUE)
+        self.assertTrue(self.state)
+        self.assertTrue(self.broker.execute('cleanup', VALUE)['removed'])
+
+    def test_authoritative_check_requires_both_aa_responses(self):
+        names = ['first.ns.cloudflare.com', 'second.ns.cloudflare.com']
+        def fake_run(args, **kwargs):
+            if args[3] == 'A':
+                return module.subprocess.CompletedProcess(args, 0, stdout='173.245.58.1\n')
+            return module.subprocess.CompletedProcess(args, 0, stdout=';; flags: qr aa; QUERY: 1\n'
+                + module.NAME + '. 60 IN TXT "' + VALUE + '"\n')
+        with patch.object(module.subprocess, 'run', side_effect=fake_run) as mocked:
+            module.authoritative_propagation(VALUE, names)
+        self.assertEqual(mocked.call_count, 4)
+        with self.assertRaises(module.RemoteError):
+            module.authoritative_propagation(VALUE, ['attacker.example', names[1]])
 
 
 if __name__ == '__main__': unittest.main()
