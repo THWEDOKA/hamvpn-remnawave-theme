@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self-steal VPN"
+  short_description: "Домен, HTTPS-сайт и REALITY self-steal для VPN"
+  default_prompt: "Используй $selfsteal: проверь параметры сервера и настрой self-steal с DNS, HTTPS, проверками и откатом."
