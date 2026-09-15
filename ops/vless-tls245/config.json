@@ -1,0 +1,31 @@
+{
+  "log": {"loglevel": "warning"},
+  "inbounds": [{
+    "tag": "vless-tls245",
+    "listen": "0.0.0.0",
+    "port": 443,
+    "protocol": "vless",
+    "settings": {"clients": [], "decryption": "none"},
+    "sniffing": {"enabled": true, "destOverride": ["http", "tls"]},
+    "streamSettings": {
+      "network": "raw",
+      "security": "tls",
+      "tlsSettings": {
+        "serverName": "tls245.torcalc.ru",
+        "minVersion": "1.2",
+        "alpn": ["h2", "http/1.1"],
+        "certificates": [{
+          "certificateFile": "/etc/letsencrypt/live/tls245.torcalc.ru/fullchain.pem",
+          "keyFile": "/etc/letsencrypt/live/tls245.torcalc.ru/privkey.pem"
+        }]
+      }
+    }
+  }],
+  "outbounds": [
+    {"tag": "DIRECT", "protocol": "freedom"},
+    {"tag": "BLOCK", "protocol": "blackhole"}
+  ],
+  "routing": {"rules": [
+    {"type": "field", "ip": ["geoip:private"], "outboundTag": "BLOCK"}
+  ]}
+}
