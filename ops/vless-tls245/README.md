@@ -16,11 +16,16 @@ are runtime-only secrets: never add them to this directory or a report.
    Retain logs and the root-only preflight backup; stop on any error.
 3. Relay `/api/keygen/` response privately into `node-key.json` on this node.
    Run `launch_node.py`; it consumes that file without printing the key.
-4. Stage the dedicated config/profile/node and disabled subscription host.
+4. Run `panel_deploy.py stage` on the panel to stage the dedicated
+   config/profile/node and disabled subscription host.
    Add only this inbound to the existing normal-server entitlement squads.
-5. Test trusted TLS, authenticated egress and actual subscription serialization,
-   then publish the host. Run `certbot renew --cert-name tls245.torcalc.ru
-   --dry-run --run-deploy-hooks` and retest egress.
+5. Run `panel_deploy.py create-test`, `probe`, then `publish` only after a
+   successful probe. `subscription_probe.py` fetches the real public Happ
+   subscription and connects through its exact VLESS outbound. If it fails,
+   immediately `panel_deploy.py rollback`. Remove the disposable user/device
+   with `panel_deploy.py cleanup-test` after all tests finish.
+6. Run `certbot renew --cert-name tls245.torcalc.ru --dry-run
+   --run-deploy-hooks --no-random-sleep-on-renew` and retest egress.
 
 The node image uses the existing fleet's 2.7.0 release and is pinned to its
 resolved digest at installation. Certificates are mounted read-only on this
