@@ -15,8 +15,9 @@ Do not change the shared RU profile or the separate TLS245 node.
    coordinate the shared repository commit lock, commit and push before production.
 2. Confirm DNS-only A `ru214.torcalc.ru` → `161.104.90.214`, without conflicting records,
    and verify both Cloudflare API readback and two public resolvers.
-3. Deploy this exact Git release. Run `deploy-web.sh http`, validate public ACME HTTP,
-   then `deploy-web.sh tls`. The installer snapshots node/firewall configuration,
+3. Deploy this exact Git release. Run `deploy-web.sh http`, validate public HTTP,
+   provision the explicitly authorized DNS-01 broker and node hook, then run
+   `deploy-web.sh tls`. The installer snapshots node/firewall configuration,
    never restarts the VPN container and exposes only port 80 in addition to existing rules.
 4. On the panel run `panel.py stage`, then `create-test` and `probe-before`.
    Test the protected candidate with the installed node Xray. Record its SHA256
@@ -70,3 +71,28 @@ remove only its certbot drop-in, and revoke only the dedicated key on the panel.
 Keep the protected snapshot `/root/selfsteal-ru214-acme-panel`; do not restore the
 whole SSH config over later administrator edits. Never revoke maintenance access
 while the active self-steal certificate depends on it without an alternative.
+
+## DNS-01 after secondary HTTP validation failed
+
+Both production and staging HTTP-01 validation failed at a secondary validator,
+although three validators and independent Windows/panel probes fetched HTTP 200.
+No AAAA record or HTTP redirect caused the failure. The user explicitly approved
+DNS-01 with the Cloudflare credential remaining only on the trusted panel.
+
+A separate key `/etc/hamvpn-acme-ru214/dns_ed25519` is generated only on RU214.
+The fixed-command panel identity `hamvpn-dns-ru214` accepts JSON on stdin:
+`{"action":"present|cleanup","validation":"<43-character base64url TXT>"}`.
+It is distinct from the forwarding-only ACME identity and has no forwarding or
+general command access. Its only DNS scope is `_acme-challenge.ru214.torcalc.ru`;
+cleanup must prove the broker owns the exact record before deletion.
+
+`dns-hook.py` validates the certificate domain and challenge value, connects using
+the pinned panel host key, and requires the broker's explicit verified propagation
+proof (both authoritative nameservers as checked from the panel). The hook
+also requires TXT visibility from Google and OpenDNS as seen by the node (both
+verified reachable; most authoritative Cloudflare addresses and Cloudflare/Quad9
+resolver UDP timed out from RU214). Its 420-second local propagation timeout fails
+closed without publishing the challenge or credentials
+in output. `acme-node.sh dns-activate` installs the hook and dnspython dependency.
+Certbot stores the manual auth/cleanup hooks in the renewal configuration; the
+existing certificate-only SOCKS path remains limited to ACME API endpoints.

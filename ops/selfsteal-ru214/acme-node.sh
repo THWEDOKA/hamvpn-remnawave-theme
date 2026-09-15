@@ -4,7 +4,7 @@ umask 077
 cd -- "$(dirname -- "$0")"
 test "$(id -u)" = 0
 ip -4 addr show | grep -Fq '161.104.90.214/'
-phase=${1:?Use key or activate}
+phase=${1:?Use key, activate or dns-activate}
 case "$phase" in
   key)
     test ! -e /etc/hamvpn-acme-ru214
@@ -28,6 +28,14 @@ case "$phase" in
     install -m 644 acme-certbot.conf /etc/systemd/system/certbot.service.d/ru214-acme.conf
     systemctl daemon-reload
     systemctl enable --now hamvpn-acme-ru214.service
+    ;;
+  dns-activate)
+    test -s /etc/hamvpn-acme-ru214/dns_ed25519
+    test -s /etc/hamvpn-acme-ru214/known_hosts
+    test ! -e /usr/local/lib/hamvpn-acme-ru214/dns-hook.py
+    DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y --no-install-recommends python3-dnspython
+    python3 -c 'import dns.resolver'
+    install -m 644 dns-hook.py /usr/local/lib/hamvpn-acme-ru214/dns-hook.py
     ;;
   *) exit 2 ;;
 esac

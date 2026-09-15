@@ -1,7 +1,9 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import panel
 
@@ -104,6 +106,50 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(proposed.replace(',\n            161.104.90.214\n        ', '\n '), source)
         with self.assertRaises(AssertionError): module.candidate(proposed)
         with self.assertRaises(AssertionError): module.candidate(source.replace('ssh_admin4', 'other'))
+
+    def dns_hook(self):
+        spec = importlib.util.spec_from_file_location('dns_hook', Path(__file__).parent / 'dns-hook.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        return module
+
+    def test_dns_hook_fixed_domain_and_strict_validation(self):
+        module = self.dns_hook()
+        self.assertEqual(module.validate({'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 43}), 'A' * 43)
+        for env in ({'CERTBOT_DOMAIN': 'other.torcalc.ru', 'CERTBOT_VALIDATION': 'A' * 43},
+                    {'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 42},
+                    {'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 42 + ';'},
+                    {'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 43 + '\n'}):
+            with self.assertRaises(AssertionError): module.validate(env)
+
+    def test_dns_broker_passes_only_json_stdin_to_fixed_identity(self):
+        module = self.dns_hook()
+        with patch.object(module.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = json.dumps({'ok': True, 'record_id': 'fixture'})
+            self.assertTrue(module.broker('present', 'A' * 43)['ok'])
+            args, kwargs = run.call_args
+            self.assertEqual(args[0][-1], 'hamvpn-dns-ru214@64.225.109.248')
+            self.assertEqual(json.loads(kwargs['input']), {'action': 'present', 'validation': 'A' * 43})
+            self.assertIn('StrictHostKeyChecking=yes', args[0])
+            self.assertNotIn('shell', kwargs)
+
+    def test_dns_auth_uncertain_reply_attempts_only_owned_cleanup(self):
+        module = self.dns_hook()
+        env = {'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 43}
+        with patch.dict(module.os.environ, env), patch.object(module.sys, 'argv', ['dns-hook.py', 'present']), \
+                patch.object(module, 'broker', side_effect=[RuntimeError('uncertain reply'), {'ok': True}]) as broker:
+            with self.assertRaises(RuntimeError): module.main()
+            self.assertEqual([call.args[0] for call in broker.call_args_list], ['present', 'cleanup'])
+
+    def test_dns_auth_requires_authoritative_proof(self):
+        module = self.dns_hook()
+        env = {'CERTBOT_DOMAIN': panel.DOMAIN, 'CERTBOT_VALIDATION': 'A' * 43}
+        with patch.dict(module.os.environ, env), patch.object(module.sys, 'argv', ['dns-hook.py', 'present']), \
+                patch.object(module, 'broker', side_effect=[{'ok': True}, {'ok': True}]) as broker, \
+                patch.object(module, 'propagate') as propagate:
+            with self.assertRaises(AssertionError): module.main()
+            self.assertEqual([call.args[0] for call in broker.call_args_list], ['present', 'cleanup'])
+            propagate.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()
