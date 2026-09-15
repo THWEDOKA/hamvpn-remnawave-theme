@@ -37,3 +37,36 @@ Node backup: `/root/selfsteal-ru214-backup`. Panel snapshots and test intent:
 
 Existing allowed traffic is not proof of a bypass of active mobile-operator allowlists.
 No such operator test is claimed without direct evidence.
+
+## Authorized certificate-only egress
+
+Direct TLS handshakes to the production and staging ACME endpoints timed out on
+RU214, while TCP connections and 1500-byte path MTU tests succeeded. There is no
+global IPv6 or configured system proxy. The user explicitly authorized a narrow
+maintenance channel through the existing HAM panel, not a general-purpose proxy.
+
+`acme-node.sh key` generates a dedicated key locally on RU214. Send only its public
+half to `acme-panel.py` on the trusted panel. Independently obtain the panel's
+ED25519 host public key through the existing verified SSH connection and install
+it in `/etc/hamvpn-acme-ru214/known_hosts` for `64.225.109.248`. Never TOFU this channel.
+After SSH configuration validation and successful unchanged-root comparison,
+activate the node service with `acme-node.sh activate`.
+
+The panel user has no SSH session, shell, SFTP, remote forwarding, Unix-socket
+forwarding, agent/X11 forwarding, tunnel, TTY, password login or user RC. Both the
+key and sshd constrain local forwarding to exactly the production/staging ACME
+hostnames on port 443; the key is accepted only from RU214's IP. The local SOCKS
+socket binds `127.0.0.1:18089`. Only certbot receives proxy environment variables.
+Python Requests/PySocks performs remote DNS using `socks5h` and still validates
+the end-to-end ACME TLS certificate. Test both allowed endpoints and negative
+destinations (`example.com:443`, `127.0.0.1:22`), shell/session and remote forwarding
+before relying on the relay for issuance or renewal.
+
+References: [Requests SOCKS support](https://requests.readthedocs.io/en/stable/user/advanced/#socks),
+[OpenSSH forwarding/session restrictions](https://man.openbsd.org/sshd_config).
+
+Relay rollback is scoped: stop/disable only `hamvpn-acme-ru214.service` on RU214,
+remove only its certbot drop-in, and revoke only the dedicated key on the panel.
+Keep the protected snapshot `/root/selfsteal-ru214-acme-panel`; do not restore the
+whole SSH config over later administrator edits. Never revoke maintenance access
+while the active self-steal certificate depends on it without an alternative.

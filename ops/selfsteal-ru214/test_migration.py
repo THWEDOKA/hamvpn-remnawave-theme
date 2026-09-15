@@ -63,5 +63,33 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn('<form', html)
         self.assertIn('Ремонт чайников', html)
 
+    def test_acme_identity_has_no_shell_or_broad_forwarding(self):
+        root = Path(__file__).parent
+        config = (root / 'acme-sshd.conf').read_text()
+        for expected in ('MaxSessions 0', 'ForceCommand /bin/false', 'PermitListen none',
+                         'AllowTcpForwarding local', 'AllowStreamLocalForwarding no',
+                         'PermitTTY no', 'PermitTunnel no', 'PermitUserRC no',
+                         'PasswordAuthentication no', 'KbdInteractiveAuthentication no'):
+            self.assertIn(expected, config)
+        allow = next(line for line in config.splitlines() if line.strip().startswith('PermitOpen '))
+        self.assertEqual(set(allow.split()[1:]), {
+            'acme-v02.api.letsencrypt.org:443', 'acme-staging-v02.api.letsencrypt.org:443'})
+        panel_source = (root / 'acme-panel.py').read_text()
+        self.assertIn('from="161.104.90.214",restrict,port-forwarding', panel_source)
+
+    def test_acme_proxy_loopback_and_certbot_only(self):
+        root = Path(__file__).parent
+        service = (root / 'acme-relay.service').read_text()
+        self.assertIn('-D 127.0.0.1:18089', service)
+        self.assertIn('StrictHostKeyChecking=yes', service)
+        self.assertIn('-F /dev/null', service)
+        self.assertNotIn('StrictHostKeyChecking=no', service)
+        dropin = (root / 'acme-certbot.conf').read_text()
+        self.assertIn('HTTPS_PROXY=socks5h://127.0.0.1:18089', dropin)
+        self.assertIn('ExecStartPre=/usr/bin/python3 /usr/local/lib/hamvpn-acme-ru214/acme-ready.py', dropin)
+        node = (root / 'acme-node.sh').read_text()
+        self.assertIn('/etc/systemd/system/certbot.service.d/ru214-acme.conf', node)
+        self.assertNotIn('/etc/environment', node)
+
 
 if __name__ == '__main__': unittest.main()

@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import socket
 import subprocess
 import sys
 
@@ -91,9 +92,15 @@ def main():
         if 'input' in request:
             stdin.write(request['input'])
         stdin.channel.shutdown_write()
-        output = stdout.read().decode('utf-8', errors='replace')
-        errors = stderr.read().decode('utf-8', errors='replace')
-        status = stdout.channel.recv_exit_status()
+        try:
+            output = stdout.read().decode('utf-8', errors='replace')
+            errors = stderr.read().decode('utf-8', errors='replace')
+            status = stdout.channel.recv_exit_status()
+        except socket.timeout:
+            stdout.channel.close()
+            print(json.dumps({'remote_outcome_unknown': True, 'reason': 'channel_timeout',
+                              'next_step': 'Inspect actual remote state before retrying'}), flush=True)
+            continue
         print(json.dumps({'exit_code': status, 'stdout': output, 'stderr': errors}), flush=True)
     ssh.close()
 

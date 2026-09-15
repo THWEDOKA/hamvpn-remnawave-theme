@@ -43,7 +43,9 @@ case "$phase" in
     test -d "$backup"
     test -f /etc/nginx/sites-available/selfsteal-ru214
     test -z "$(ss -lntH 'sport = :8443')"
-    certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
+    systemctl is-active --quiet hamvpn-acme-ru214.service
+    python3 /usr/local/lib/hamvpn-acme-ru214/acme-ready.py
+    HTTPS_PROXY=socks5h://127.0.0.1:18089 certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
       --webroot -w /var/www/acme --preferred-challenges http \
       --key-type ecdsa --elliptic-curve secp256r1 --cert-name ru214.torcalc.ru -d ru214.torcalc.ru
     install -m 644 nginx-tls.conf /etc/nginx/sites-available/selfsteal-ru214
