@@ -1,10 +1,14 @@
 import json
+import importlib.util
 import re
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+SPEC = importlib.util.spec_from_file_location('panel_selfsteal', ROOT / 'panel-selfsteal.py')
+PANEL = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PANEL)
 
 
 class PageParser(HTMLParser):
@@ -33,6 +37,37 @@ def contrast(a, b):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_profile_clone_changes_only_scoped_fields(self):
+        old = {
+            'inbounds': [{'tag': 'vless-reality-shared', 'port': 443, 'protocol': 'vless',
+                          'settings': {'clients': []}, 'streamSettings': {
+                              'network': 'raw', 'security': 'reality', 'realitySettings': {
+                                  'target': 'google.com:443', 'privateKey': 'test-only-key',
+                                  'shortIds': ['abcd'], 'serverNames': ['global.hambot.ru']}}}],
+            'outbounds': [{'tag': 'DIRECT', 'protocol': 'freedom'}],
+            'routing': {'rules': [{'inboundTag': ['vless-reality-shared'], 'outboundTag': 'DIRECT'}]},
+        }
+        before = json.dumps(old, sort_keys=True)
+        new = PANEL.clone_config(old)
+        self.assertEqual(json.dumps(old, sort_keys=True), before)
+        reality = new['inbounds'][0]['streamSettings']['realitySettings']
+        self.assertEqual(reality['privateKey'], 'test-only-key')
+        self.assertEqual(reality['shortIds'], ['abcd'])
+        self.assertEqual(reality['serverNames'], ['us3.torcalc.ru', 'global.hambot.ru'])
+        self.assertEqual(reality['target'], '127.0.0.1:8443')
+        self.assertEqual(new['outbounds'], old['outbounds'])
+        self.assertEqual(new['routing']['rules'][0]['inboundTag'], [PANEL.TAG])
+        self.assertEqual(old['routing']['rules'][0]['inboundTag'], ['vless-reality-shared'])
+
+    def test_operator_requires_scoped_backup_and_probe_before_publish(self):
+        code = (ROOT / 'panel-selfsteal.py').read_text()
+        self.assertLess(code.index("save('snapshot.json'"), code.index("api('POST'"))
+        self.assertIn("assert len(profile['nodes']) == 15", code)
+        self.assertIn("assert proof['all_passed']", code)
+        self.assertIn("time.time() - proof['timestamp'] < 600", code)
+        self.assertNotIn("api('DELETE'", code)
+        self.assertIn("- {NODE}", code)
+
     def test_dns_is_scoped_and_unproxied(self):
         self.assertEqual(json.loads((ROOT / 'dns-record.json').read_text()), {
             'type': 'A', 'name': 'us3.torcalc.ru', 'content': '162.141.185.216',

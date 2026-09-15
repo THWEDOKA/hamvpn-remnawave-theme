@@ -57,3 +57,40 @@ Web rollback: restore the saved HTTP config if TLS validation fails. Never
 stop nginx or remove certificates while REALITY still targets localhost:8443;
 restore the panel's original profile first. Root-only backups must remain on
 the server and must never be included in Git or the public journal.
+
+## Isolated panel transition
+
+Run `panel-selfsteal.py` as root on the panel server, from the verified Git
+release. `panel_api.py` derives a short-lived existing-admin API session from
+local runtime secrets; neither secrets nor session tokens are logged or stored
+in this repository. No persistent API credential is created. All writes use
+the panel API, not direct database updates.
+
+Sequence: `probe-before`, `stage`, `switch`, `probe-after`, `publish`, `verify`.
+Before `stage`, independently verify the node's loopback HTTPS certificate,
+TLS 1.3 and HTTP/2. Before `switch`, validate the staged config using the actual
+node's Xray version. The operator backs up the original profile, node, hosts
+and four affected squads under `/root/selfsteal-us3-panel` before its first
+mutation. This protected directory is not a release artifact.
+
+The clone has a globally unique inbound tag, preserves the existing REALITY
+key, short IDs, old server names and routing, and adds the new inbound to the
+same four user squads without removing their old inbound access. Only the
+specified node moves. The visible host and its hidden same-node counterpart
+receive the new address, SNI and Host field after fresh VPN probes pass.
+For raw TCP, Host is inert unless HTTP header obfuscation is enabled; this
+pilot does not enable or change HTTP obfuscation.
+
+Probes use the existing active dedicated whitelist test account, not a customer
+account. Client files are temporary and root-only; they are removed after each
+bounded probe. The test executable is copied from the running node, verified
+by SHA-256, and runs only a loopback SOCKS listener on the panel server.
+Both the cached IP/global.hambot.ru/qq route and the new domain route (qq and
+Chrome fingerprints) must reach HTTPS 204 and return the expected exit IP.
+
+If any post-switch check fails, execute `rollback` immediately. It restores the
+original node and host bindings through the API and removes only the added
+inbound from the affected squads, retaining other concurrent squad additions.
+The inactive clone and protected backup remain for recovery; no profiles,
+users or databases are deleted. Investigate concurrent node/host changes
+before proceeding. Do not blindly retry an uncertain profile-creation POST.
