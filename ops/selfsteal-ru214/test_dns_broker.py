@@ -109,6 +109,9 @@ class DNSBrokerTests(unittest.TestCase):
         self.assertIn("/usr/bin/python3 -I /usr/local/lib/hamvpn-dns-ru214/broker.py", source)
         self.assertLess(source.index("run('systemctl', 'reload', 'ssh')"), source.index('KEY.write_bytes'))
         self.assertLess(source.index('if KEY.exists(): KEY.replace'), source.index('if CONF.exists(): CONF.unlink'))
+        self.assertIn('KEY.parent.chmod(0o755)', source)
+        self.assertIn("assert KEY.parent.stat().st_mode & 0o001", source)
+        self.assertIn("{path.name for path in KEY.parent.iterdir()} == {USER}", source)
 
     def test_propagation_claim_requires_successful_check(self):
         called = []

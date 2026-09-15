@@ -47,6 +47,21 @@ def effective(user):
     return run('/usr/sbin/sshd', '-T', '-C', 'user=' + user + ',addr=161.104.90.214,host=ru214')
 
 
+def repair_key_directory():
+    """Repair only this installer's new public-key directory, never a shared one."""
+    assert os.geteuid() == 0 and (STATE / 'installed.json').is_file()
+    assert KEY.parent.stat().st_uid == 0 and KEY.stat().st_uid == 0
+    assert {path.name for path in KEY.parent.iterdir()} == {USER}
+    assert KEY.parent.stat().st_mode & 0o777 == 0o700
+    assert KEY.stat().st_mode & 0o777 == 0o644
+    record = {'directory': str(KEY.parent), 'previous_mode': '0700', 'new_mode': '0755',
+              'only_public_key_present': True}
+    (STATE / 'key-directory-repair.json').write_text(json.dumps(record))
+    KEY.parent.chmod(0o755)
+    assert KEY.parent.stat().st_mode & 0o777 == 0o755
+    print(json.dumps({'public_key_directory_traversable': True, 'other_directories_changed': False}))
+
+
 def main():
     assert os.geteuid() == 0
     os.umask(0o077)
@@ -83,8 +98,11 @@ def main():
     script = LIB / 'broker.py'; script.write_bytes(Path(__file__).with_name('dns-broker.py').read_bytes()); script.chmod(0o644)
     run('useradd', '--system', '--create-home', '--home-dir', '/var/lib/' + USER, '--shell', '/bin/sh', USER)
     os.chown('/var/lib/' + USER, 0, 0); os.chmod('/var/lib/' + USER, 0o755)
-    KEY.parent.mkdir(mode=0o755, exist_ok=True)
+    if not KEY.parent.exists():
+        KEY.parent.mkdir(mode=0o755)
+        KEY.parent.chmod(0o755)  # Explicitly counter the secret-safe process umask.
     assert KEY.parent.stat().st_uid == 0 and not KEY.parent.stat().st_mode & 0o022
+    assert KEY.parent.stat().st_mode & 0o001, 'Existing public-key directory is not traversable'
     pending = STATE / 'authorized_key.pending'
     pending.write_text('from="161.104.90.214",restrict ' + public + '\n'); pending.chmod(0o600)
     try:
@@ -116,7 +134,12 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
+        if sys.argv[1:] == ['--repair-key-directory']:
+            repair_key_directory()
+        elif not sys.argv[1:]:
+            main()
+        else:
+            raise ValueError('Unsupported operator arguments')
     except Exception as error:
         print(json.dumps({'ok': False, 'error': 'DNS broker provisioning stopped; inspect protected state',
                           'error_type': type(error).__name__}), file=sys.stderr)
