@@ -32,6 +32,11 @@ TIMER = 'selfsteal-tls245-rollback'
 save, read, ids = common.save, common.read, common.ids
 
 
+def connection_fields(host):
+    # A concurrent host insertion/reorder changes positions, not connections.
+    return {k: v for k, v in host.items() if k != 'viewPosition'}
+
+
 def binding(node):
     return {'activeConfigProfileUuid': node['configProfile']['activeConfigProfileUuid'],
         'activeInbounds': [i['uuid'] for i in node['configProfile']['activeInbounds']]}
@@ -226,20 +231,30 @@ def verify(api):
         for k in ('name', 'address', 'port', 'isDisabled', 'configProfile'):
             assert n[k] == nodes[n['uuid']][k], 'Unrelated node changed'
     hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
+    reordered = []
     for h in before['hosts']:
-        if h['uuid'] != HOST: assert h == hosts[h['uuid']], 'Unrelated host changed'
+        if h.get('viewPosition') != hosts[h['uuid']].get('viewPosition'):
+            reordered.append(h['uuid'])
+        if h['uuid'] != HOST:
+            assert connection_fields(h) == connection_fields(hosts[h['uuid']]), 'Unrelated host connection changed'
     expected = copy.deepcopy(before['host'])
     expected.update(address=DOMAIN, sni=DOMAIN, host=DOMAIN,
         inbound={'configProfileUuid': created['profile'], 'configProfileInboundUuid': created['inbounds'][TAGS[0]]})
-    assert hosts[HOST] == expected
+    assert connection_fields(hosts[HOST]) == connection_fields(expected)
     assert api('GET', '/api/config-profiles/' + OLD_PROFILE)['config'] == before['profile']['config']
+    concurrent_additions = {}
     for squad in before['squads']:
         current = api('GET', '/api/internal-squads/' + squad['uuid'])
         expected_ids = set(ids(squad))
         if squad['uuid'] in before['selected_squads']: expected_ids.update(created['inbounds'].values())
-        assert set(ids(current)) == expected_ids, 'Unexpected squad change'
+        assert expected_ids <= set(ids(current)), 'Required squad access removed'
+        extra = set(ids(current)) - expected_ids
+        if extra: concurrent_additions[squad['name']] = sorted(extra)
     return {'target_connected': True, 'other_nodes_preserved': len(before['nodes'])-1,
-        'other_hosts_preserved': len(before['hosts'])-1, 'old_profile_preserved': True}
+        'other_host_connections_preserved': len(before['hosts'])-1, 'old_profile_preserved': True,
+        'concurrent_host_positions_preserved': len(reordered),
+        'concurrent_new_hosts_preserved': len(set(hosts) - {h['uuid'] for h in before['hosts']}),
+        'concurrent_squad_additions_preserved': concurrent_additions}
 
 
 def subscription(api):

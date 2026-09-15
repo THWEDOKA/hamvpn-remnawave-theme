@@ -61,5 +61,12 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn('<form', html)
         self.assertNotIn('src="http', html)
 
+    def test_host_order_not_confused_with_connection_change(self):
+        old = {'uuid': 'host', 'address': 'example.com', 'port': 443, 'viewPosition': 10}
+        reordered = dict(old, viewPosition=11)
+        changed = dict(old, address='changed.example.com')
+        self.assertEqual(panel.connection_fields(old), panel.connection_fields(reordered))
+        self.assertNotEqual(panel.connection_fields(old), panel.connection_fields(changed))
+
 
 if __name__ == '__main__': unittest.main()
