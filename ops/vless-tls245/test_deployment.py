@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+
+import panel_deploy
 
 ROOT = Path(__file__).parent
 
@@ -40,6 +43,28 @@ class DeploymentTests(unittest.TestCase):
     def test_no_insecure_tls(self):
         source = (ROOT / 'config.json').read_text()
         self.assertNotIn('allowInsecure', source)
+
+    def test_publication_rejects_unverified_probe(self):
+        with patch.object(panel_deploy, 'read', return_value={'all_passed': False}):
+            with self.assertRaises(AssertionError):
+                panel_deploy.publish(lambda *args: self.fail('API mutation must not happen'))
+
+    def test_publication_rejects_stale_probe(self):
+        with patch.object(panel_deploy, 'read', return_value={'all_passed': True, 'timestamp': 0}):
+            with self.assertRaises(AssertionError):
+                panel_deploy.publish(lambda *args: self.fail('API mutation must not happen'))
+
+    def test_rollback_preserves_unrelated_inbounds(self):
+        calls = []
+        def api(method, path, body=None):
+            calls.append((method, path, body))
+            return {'inbounds': [{'uuid': i} for i in ['original', 'new', 'concurrent']]}
+        with patch.object(panel_deploy, 'read', return_value={
+                'host': 'new-host', 'inbound': 'new', 'squads': ['selected']}), \
+                patch.object(panel_deploy, 'save'):
+            panel_deploy.rollback(api)
+        self.assertEqual(calls[-1][2]['inbounds'], ['original', 'concurrent'])
+        self.assertEqual(calls[0][2], {'uuid': 'new-host', 'isDisabled': True})
 
 
 if __name__ == '__main__':
