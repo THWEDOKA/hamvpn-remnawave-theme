@@ -4,6 +4,7 @@ import base64
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -211,8 +212,28 @@ def publish(api):
     return {'published': True, 'name_preserved': before['host']['remark']}
 
 
+def reviewed_host(original, changes):
+    """Allow only exact independently reviewed concurrent IP changes, never a wildcard."""
+    expected = copy.deepcopy(original)
+    if original['uuid'] in changes:
+        change = changes[original['uuid']]
+        assert original['uuid'] != HOST and set(change) == {'before', 'after'}
+        assert original['address'] == change['before'] and change['before'] != change['after']
+        for value in change.values():
+            assert str(ipaddress.IPv4Address(value)) == value
+        expected['address'] = change['after']
+    return expected
+
+
 def verify(api):
     before, created = read('before'), read('created')
+    concurrent = {}
+    if (STATE / 'reviewed-concurrent-addresses.json').exists():
+        review = read('reviewed-concurrent-addresses')
+        assert review['snapshot_sha256'] == hashlib.sha256((STATE / 'before.json').read_bytes()).hexdigest()
+        assert review['reviewed'] is True
+        concurrent = review['hosts']
+        assert set(concurrent) <= {h['uuid'] for h in before['hosts']} - {HOST}
     nodes = {n['uuid']: n for n in api('GET', '/api/nodes/')}
     assert nodes[NODE]['isConnected'] and not nodes[NODE]['isDisabled']
     assert binding(nodes[NODE]) == {'activeConfigProfileUuid': created['profile'], 'activeInbounds': [created['inbound']]}
@@ -224,7 +245,8 @@ def verify(api):
     for host in before['hosts']:
         if host['uuid'] == HOST: continue
         current = hosts[host['uuid']]
-        assert {k: v for k, v in host.items() if k != 'viewPosition'} == {k: v for k, v in current.items() if k != 'viewPosition'}, 'Unrelated host changed'
+        expected_host = reviewed_host(host, concurrent)
+        assert {k: v for k, v in expected_host.items() if k != 'viewPosition'} == {k: v for k, v in current.items() if k != 'viewPosition'}, 'Unreviewed unrelated host change'
         reordered += host.get('viewPosition') != current.get('viewPosition')
     expected = copy.deepcopy(before['host'])
     expected.update(address=DOMAIN, sni=DOMAIN, host=DOMAIN, inbound={
@@ -242,6 +264,7 @@ def verify(api):
             'other_node_bindings_preserved': len(before['nodes']) - 1,
             'other_hosts_preserved': len(before['hosts']) - 1, 'old_profile_preserved': True,
             'concurrent_squad_additions_preserved': extras,
+            'reviewed_concurrent_address_changes_preserved': len(concurrent),
             'concurrent_host_reorders_preserved': reordered,
             'concurrent_new_hosts_preserved': len(set(hosts) - {h['uuid'] for h in before['hosts']})}
 

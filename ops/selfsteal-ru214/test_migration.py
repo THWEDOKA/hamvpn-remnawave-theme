@@ -37,6 +37,19 @@ class MigrationTests(unittest.TestCase):
         new = panel.candidate(self.original())
         self.assertEqual(new['routing']['rules'][0]['inboundTag'], [panel.TAG, 'unrelated'])
 
+    def test_reviewed_concurrent_address_is_exact_and_preserves_every_other_field(self):
+        old = {'uuid': 'fixture-host', 'address': '192.0.2.1', 'sni': 'example.com', 'inbound': {'id': 'fixture'}}
+        changes = {'fixture-host': {'before': '192.0.2.1', 'after': '192.0.2.2'}}
+        self.assertEqual(panel.reviewed_host(old, changes), dict(old, address='192.0.2.2'))
+        self.assertEqual(old['address'], '192.0.2.1')
+        self.assertEqual(panel.reviewed_host(old, {}), old)
+        for invalid in ({'before': '192.0.2.3', 'after': '192.0.2.2'},
+                        {'before': '192.0.2.1', 'after': '192.0.2.1'},
+                        {'before': '192.0.2.1', 'after': '192.0.2.2', 'sni': 'changed.invalid'}):
+            with self.assertRaises(AssertionError): panel.reviewed_host(old, {'fixture-host': invalid})
+        with self.assertRaises(AssertionError):
+            panel.reviewed_host(dict(old, uuid=panel.HOST), {panel.HOST: changes['fixture-host']})
+
     def test_wrong_source_stops(self):
         for mutate in (
                 lambda c: c['inbounds'][0].update(port=444),
