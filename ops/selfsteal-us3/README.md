@@ -31,7 +31,29 @@ https://developers.cloudflare.com/api/resources/dns/subresources/records/methods
 
 ## Current state
 
-DNS declaration prepared; creation is not yet confirmed in this commit.
-SSH access remains unavailable: the checked local admin keys were rejected.
-No certificate, website, new REALITY profile, host-address or SNI change has
-been deployed. A DNS record alone does not make self-steal operational.
+2026-09-15: SSH access confirmed on `util-us-3` (Ubuntu 24.04). DNS record
+`8744cbaad10e927459214fa1d8f51d63` was created and verified through the API,
+Google DNS and Cloudflare DNS, with exactly the manifest values.
+
+The web release is prepared for deployment, not yet an operational self-steal
+endpoint. `deploy-web.sh http` creates protected configuration/firewall backups,
+installs nginx and Certbot without restarting the existing node, then serves
+the static page and ACME on port 80. `deploy-web.sh tls` obtains an ECDSA
+certificate using HTTP-01 and enables TLS 1.3 / HTTP/2 only on 127.0.0.1:8443.
+No Cloudflare token is copied to the server. Certbot's systemd timer and a
+checked nginx reload hook handle renewal. Port 443 remains owned by Xray.
+
+Run the script only from an archive of the verified GitHub main commit. The
+HTTP phase refuses an existing nginx installation or occupied port 80; review
+existing state rather than bypassing those checks. The TLS phase requires
+correct public DNS and reachable HTTP. Check the certificate and TLS locally
+before changing any panel profile or subscription host.
+
+The page uses an intentionally retro system-font layout with tested contrast,
+mobile reflow, semantic headings and no third-party resources, forms, payments,
+fabricated reviews, business history or contact details.
+
+Web rollback: restore the saved HTTP config if TLS validation fails. Never
+stop nginx or remove certificates while REALITY still targets localhost:8443;
+restore the panel's original profile first. Root-only backups must remain on
+the server and must never be included in Git or the public journal.
