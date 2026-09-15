@@ -65,7 +65,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("assert len(profile['nodes']) == 15", code)
         self.assertIn("assert proof['all_passed']", code)
         self.assertIn("time.time() - proof['timestamp'] < 600", code)
-        self.assertNotIn("api('DELETE'", code)
+        self.assertNotIn("api('DELETE', '/api/config-profiles", code)
+        self.assertEqual(code.count("api('DELETE'"), 1)
+        self.assertIn("current['tag'] == 'SELFSTEAL_PROBE'", code)
         self.assertIn("- {NODE}", code)
 
     def test_dns_is_scoped_and_unproxied(self):

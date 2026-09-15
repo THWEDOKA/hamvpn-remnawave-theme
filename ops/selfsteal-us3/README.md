@@ -66,7 +66,8 @@ local runtime secrets; neither secrets nor session tokens are logged or stored
 in this repository. No persistent API credential is created. All writes use
 the panel API, not direct database updates.
 
-Sequence: `probe-before`, `stage`, `switch`, `probe-after`, `publish`, `verify`.
+Sequence: `create-test`, `probe-before`, `stage`, `switch`, `probe-after`,
+`publish`, `verify`, `cleanup-test`.
 Before `stage`, independently verify the node's loopback HTTPS certificate,
 TLS 1.3 and HTTP/2. Before `switch`, validate the staged config using the actual
 node's Xray version. The operator backs up the original profile, node, hosts
@@ -81,8 +82,13 @@ receive the new address, SNI and Host field after fresh VPN probes pass.
 For raw TCP, Host is inert unless HTTP header obfuscation is enabled; this
 pilot does not enable or change HTTP obfuscation.
 
-Probes use the existing active dedicated whitelist test account, not a customer
-account. Client files are temporary and root-only; they are removed after each
+The previously existing test account has no access to this node. Probes instead
+use a new temporary technical account in the BASE squad, limited to one hour
+and 1 GiB, with no Telegram ID or email. Its creation intent is saved before
+the API request; never repeat an uncertain create. `cleanup-test` matches its
+exact UUID, name, tag and description before removing it and verifies absence
+in the database. No customer account is modified. Client files are root-only
+and temporary; they are removed after each
 bounded probe. The test executable is copied from the running node, verified
 by SHA-256, and runs only a loopback SOCKS listener on the panel server.
 Both the cached IP/global.hambot.ru/qq route and the new domain route (qq and

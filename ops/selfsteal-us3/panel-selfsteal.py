@@ -2,6 +2,7 @@
 import argparse
 import base64
 import copy
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import uuid as uuidlib
 
 from panel_api import create_client
 
@@ -23,6 +25,7 @@ DOMAIN = 'us3.torcalc.ru'
 IP = '162.141.185.216'
 STATE = Path('/root/selfsteal-us3-panel')
 XRAY = '/root/selfsteal-us3-test/xray'
+TEST_ACCOUNT = Path('/root/selfsteal-us3-test/probe-account.json')
 
 
 def clone_config(config):
@@ -174,6 +177,32 @@ def rollback(api):
     return {'restored': True, 'inactive_profile_retained': profile_id}
 
 
+def create_test(api, query):
+    assert not TEST_ACCOUNT.exists(), 'Existing test intent; inspect before retry'
+    user_id = str(uuidlib.uuid4())
+    body = {'uuid': user_id, 'username': 'ss_us3_probe_' + user_id[:8],
+            'expireAt': (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            'trafficLimitBytes': 1024 * 1024 * 1024, 'trafficLimitStrategy': 'NO_RESET',
+            'tag': 'SELFSTEAL_PROBE', 'description': 'Temporary USA-3 deployment probe; remove after verification',
+            'activeInternalSquads': ['fbbac611-42b0-4d4a-8be4-8f2faf555f5d']}
+    TEST_ACCOUNT.write_text(json.dumps(body))
+    TEST_ACCOUNT.chmod(0o600)
+    created = api('POST', '/api/users/', body)
+    assert created['uuid'] == user_id and created['username'] == body['username']
+    return {'created_test_account': True, 'expires_in_minutes': 60, 'traffic_limit_gib': 1}
+
+
+def cleanup_test(api, query):
+    intent = json.loads(TEST_ACCOUNT.read_text())
+    current = api('GET', f"/api/users/{intent['uuid']}")
+    assert current['uuid'] == intent['uuid'] and current['username'] == intent['username']
+    assert current['tag'] == 'SELFSTEAL_PROBE' and current['description'] == intent['description']
+    api('DELETE', f"/api/users/{intent['uuid']}")
+    remaining = query("SELECT json_build_object('remaining',count(*)) FROM users WHERE uuid='" + intent['uuid'] + "'")
+    assert remaining['remaining'] == 0
+    return {'temporary_test_account_deleted': True, 'verified_absent': True}
+
+
 def probe(api, query, after):
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -181,7 +210,9 @@ def probe(api, query, after):
     reality = profile['config']['inbounds'][0]['streamSettings']['realitySettings']
     key = X25519PrivateKey.from_private_bytes(base64.urlsafe_b64decode(reality['privateKey'] + '='))
     public = base64.urlsafe_b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode().rstrip('=')
-    user = query("SELECT json_build_object('vless_uuid',u.vless_uuid) FROM users u WHERE u.username='test-whitelist-7549375934gfd34' AND u.status='ACTIVE' AND u.expire_at>now() AND EXISTS(SELECT 1 FROM internal_squad_members m JOIN internal_squad_inbounds i ON i.internal_squad_uuid=m.internal_squad_uuid WHERE m.user_id=u.t_id AND i.inbound_uuid='41b6c310-32dd-4845-acc6-816ed48e2ff9')")
+    intent = json.loads(TEST_ACCOUNT.read_text())
+    user = api('GET', f"/api/users/{intent['uuid']}")
+    assert user['username'] == intent['username'] and user['status'] == 'ACTIVE'
     scenarios = [('cached', IP, 'global.hambot.ru', 'qq')]
     if after:
         scenarios += [('new-qq', DOMAIN, DOMAIN, 'qq'), ('new-chrome', DOMAIN, DOMAIN, 'chrome')]
@@ -193,7 +224,7 @@ def probe(api, query, after):
         config = {'log': {'loglevel': 'warning'}, 'inbounds': [{'listen': '127.0.0.1', 'port': port,
                   'protocol': 'socks', 'settings': {'auth': 'noauth', 'udp': False}}],
                   'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': address, 'port': 443,
-                  'users': [{'id': user['vless_uuid'], 'encryption': 'none', 'flow': 'xtls-rprx-vision'}]}]},
+                  'users': [{'id': user['vlessUuid'], 'encryption': 'none', 'flow': 'xtls-rprx-vision'}]}]},
                   'streamSettings': {'network': 'raw', 'security': 'reality', 'realitySettings': {
                   'serverName': sni, 'fingerprint': fingerprint, 'publicKey': public, 'shortId': reality['shortIds'][0]}}}]}
         with tempfile.TemporaryDirectory(prefix='probe-', dir='/root/selfsteal-us3-test') as directory:
@@ -231,13 +262,17 @@ def probe(api, query, after):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['stage', 'switch', 'publish', 'verify', 'rollback', 'probe-before', 'probe-after'])
+    parser.add_argument('action', choices=['stage', 'switch', 'publish', 'verify', 'rollback', 'probe-before', 'probe-after', 'create-test', 'cleanup-test'])
     args = parser.parse_args()
     assert os.geteuid() == 0
     os.umask(0o077)
     api, query = create_client()
     if args.action.startswith('probe-'):
         result = probe(api, query, args.action == 'probe-after')
+    elif args.action == 'create-test':
+        result = create_test(api, query)
+    elif args.action == 'cleanup-test':
+        result = cleanup_test(api, query)
     else:
         result = globals()[args.action](api)
     print(json.dumps(result, ensure_ascii=False))
