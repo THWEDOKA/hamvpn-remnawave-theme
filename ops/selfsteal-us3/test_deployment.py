@@ -37,6 +37,14 @@ def contrast(a, b):
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_concurrent_squad_additions_are_preserved_not_reverted(self):
+        original = {'inbounds': [{'uuid': 'old'}]}
+        current = {'inbounds': [{'uuid': 'old'}, {'uuid': 'pilot'}, {'uuid': 'concurrent'}]}
+        self.assertEqual(PANEL.preserved_squad_access(original, current, 'pilot'), 1)
+        for missing in ['old', 'pilot']:
+            with self.assertRaises(AssertionError):
+                PANEL.preserved_squad_access(original, {'inbounds': [i for i in current['inbounds'] if i['uuid'] != missing]}, 'pilot')
+
     def test_profile_clone_changes_only_scoped_fields(self):
         old = {
             'inbounds': [{'tag': 'vless-reality-shared', 'port': 443, 'protocol': 'vless',

@@ -51,6 +51,13 @@ def ids(squad):
     return [i['uuid'] for i in squad['inbounds']]
 
 
+def preserved_squad_access(original, current, pilot_id):
+    expected = {*ids(original), pilot_id}
+    actual = set(ids(current))
+    assert expected <= actual, 'Original or pilot squad access removed'
+    return len(actual - expected)
+
+
 def node_binding(node):
     p = node['configProfile']
     return {'activeConfigProfileUuid': p['activeConfigProfileUuid'],
@@ -142,9 +149,12 @@ def verify(api):
     new = api('GET', f"/api/config-profiles/{state['profile']}")
     assert new['config'] == clone_config(backup['profile']['config'])
     assert [n['uuid'] for n in new['nodes']] == [NODE]
+    concurrent_additions = {}
     for squad in backup['squads']:
         current = api('GET', f"/api/internal-squads/{squad['uuid']}")
-        assert set(ids(current)) == {*ids(squad), state['inbound']}
+        extra = preserved_squad_access(squad, current, state['inbound'])
+        if extra:
+            concurrent_additions[squad['name']] = extra
     node = api('GET', f'/api/nodes/{NODE}')
     assert node['isConnected'] and not node['isDisabled']
     for uuid in HOSTS:
@@ -152,7 +162,8 @@ def verify(api):
         assert host['address'] == host['sni'] == host['host'] == DOMAIN
         assert host['inbound']['configProfileInboundUuid'] == state['inbound']
     return {'verified': True, 'other_nodes_preserved': 14, 'connected': node['isConnected'],
-            'users_online': node.get('usersOnline'), 'xray_uptime': node.get('xrayUptime')}
+            'users_online': node.get('usersOnline'), 'xray_uptime': node.get('xrayUptime'),
+            'concurrent_squad_additions_preserved': concurrent_additions}
 
 
 def rollback(api):

@@ -26,7 +26,7 @@ def create_client():
       with opener.open(req,timeout=30) as r:
        data=r.read()
        j=json.loads(data) if data else {}
-       return j.get("response",j)
+               return j.get("response",j) if isinstance(j, dict) else j
      except urllib.error.HTTPError as e:
       raise RuntimeError("API "+method+" "+path+" HTTP "+str(e.code)) from None
     return api, query
