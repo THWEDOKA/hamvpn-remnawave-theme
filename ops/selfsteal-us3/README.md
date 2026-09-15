@@ -35,8 +35,10 @@ https://developers.cloudflare.com/api/resources/dns/subresources/records/methods
 `8744cbaad10e927459214fa1d8f51d63` was created and verified through the API,
 Google DNS and Cloudflare DNS, with exactly the manifest values.
 
-The web release is prepared for deployment, not yet an operational self-steal
-endpoint. `deploy-web.sh http` creates protected configuration/firewall backups,
+The self-steal endpoint is deployed and verified. See
+[deployment-2026-09-15.md](deployment-2026-09-15.md) for the completed checks,
+release provenance and rollback references. `deploy-web.sh http` creates
+protected configuration/firewall backups,
 installs nginx and Certbot without restarting the existing node, then serves
 the static page and ACME on port 80. `deploy-web.sh tls` obtains an ECDSA
 certificate using HTTP-01 and enables TLS 1.3 / HTTP/2 only on 127.0.0.1:8443.
@@ -100,3 +102,8 @@ inbound from the affected squads, retaining other concurrent squad additions.
 The inactive clone and protected backup remain for recovery; no profiles,
 users or databases are deleted. Investigate concurrent node/host changes
 before proceeding. Do not blindly retry an uncertain profile-creation POST.
+
+Final verification requires all original squad inbounds plus the pilot inbound
+to remain present. It reports, but does not remove, additional concurrent
+inbounds. During this deployment a separate change added `GZ_WS_APIS` to WHITE
+and site after the initial checks; both additions were preserved.
