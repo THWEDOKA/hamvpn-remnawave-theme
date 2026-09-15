@@ -53,7 +53,7 @@ def validate_candidate(ssh):
 def upload_release(ssh, commit):
     assert re.fullmatch('[0-9a-f]{40}', commit)
     repository = Path(__file__).resolve().parents[2]
-    release = subprocess.check_output(['git', '-C', str(repository), 'archive', commit,
+    release = subprocess.check_output(['git', '-c', 'core.autocrlf=false', '-C', str(repository), 'archive', commit,
                                       'ops/selfsteal-ru214', 'ops/selfsteal-us3/panel_api.py'])
     path = '/root/ru214-release-' + commit + '.tar'
     with ssh.open_sftp() as sftp:
