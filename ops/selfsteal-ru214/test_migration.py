@@ -1,4 +1,5 @@
 import copy
+import importlib.util
 from pathlib import Path
 import unittest
 
@@ -76,6 +77,8 @@ class MigrationTests(unittest.TestCase):
             'acme-v02.api.letsencrypt.org:443', 'acme-staging-v02.api.letsencrypt.org:443'})
         panel_source = (root / 'acme-panel.py').read_text()
         self.assertIn('from="161.104.90.214",restrict,port-forwarding', panel_source)
+        self.assertLess(panel_source.index("run('systemctl', 'reload', 'ssh')"), panel_source.index('pending.replace(authorized)'))
+        self.assertLess(panel_source.index('authorized.replace(directory'), panel_source.index('if CONF.exists(): CONF.unlink()'))
 
     def test_acme_proxy_loopback_and_certbot_only(self):
         root = Path(__file__).parent
@@ -90,6 +93,17 @@ class MigrationTests(unittest.TestCase):
         node = (root / 'acme-node.sh').read_text()
         self.assertIn('/etc/systemd/system/certbot.service.d/ru214-acme.conf', node)
         self.assertNotIn('/etc/environment', node)
+
+    def test_firewall_patch_changes_only_existing_ssh_set(self):
+        path = Path(__file__).parent / 'acme-firewall.py'
+        spec = importlib.util.spec_from_file_location('acme_firewall', path)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        source = 'table inet hamvpn_filter {\n set ssh_admin4 {\n type ipv4_addr\n flags interval\n elements = {\n 192.0.2.1,\n 192.0.2.2\n }\n }\n counter drop\n}'
+        proposed = module.candidate(source)
+        self.assertIn('161.104.90.214', proposed)
+        self.assertEqual(proposed.replace(',\n            161.104.90.214\n        ', '\n '), source)
+        with self.assertRaises(AssertionError): module.candidate(proposed)
+        with self.assertRaises(AssertionError): module.candidate(source.replace('ssh_admin4', 'other'))
 
 
 if __name__ == '__main__': unittest.main()

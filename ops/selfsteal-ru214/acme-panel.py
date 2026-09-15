@@ -61,23 +61,27 @@ def main():
     directory = HOME / '.ssh'
     directory.mkdir(mode=0o700)
     authorized = directory / 'authorized_keys'
-    authorized.write_text(OPTIONS + ' ' + public + '\n'); authorized.chmod(0o600)
+    pending = directory / 'authorized_keys.pending'
+    pending.write_text(OPTIONS + ' ' + public + '\n'); pending.chmod(0o600)
     os.chown(directory, account.pw_uid, account.pw_gid)
-    os.chown(authorized, account.pw_uid, account.pw_gid)
-    CONF.write_text((Path(__file__).parent / 'acme-sshd.conf').read_text())
-    CONF.chmod(0o644)
+    os.chown(pending, account.pw_uid, account.pw_gid)
     try:
+        CONF.write_text((Path(__file__).parent / 'acme-sshd.conf').read_text())
+        CONF.chmod(0o644)
         run('/usr/sbin/sshd', '-t')
         assert effective('root') == before, 'Root SSH configuration changed'
         validate(effective(USER))
         run('systemctl', 'reload', 'ssh')
+        # Authentication becomes possible only after restrictive sshd policy is loaded.
+        pending.replace(authorized)
+        (STATE / 'installed.json').write_text(json.dumps({'user': USER, 'root_config_preserved': True}))
     except Exception:
-        # Remove only our new drop-in; existing SSH files are never overwritten.
-        CONF.unlink()
+        # Fail closed: revoke our only active key BEFORE removing its policy.
+        if authorized.exists(): authorized.replace(directory / 'authorized_keys.revoked')
+        if CONF.exists(): CONF.unlink()
         run('/usr/sbin/sshd', '-t')
         run('systemctl', 'reload', 'ssh')
         raise
-    (STATE / 'installed.json').write_text(json.dumps({'user': USER, 'root_config_preserved': True}))
     print(json.dumps({'forwarding_identity_created': USER, 'root_config_preserved': True,
                       'allowed_destinations': 2, 'sshd_configuration_valid': True}))
 
