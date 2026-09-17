@@ -32,7 +32,7 @@ STATE = Path('/root/hamvpn-cloud140-kz245-20260917/reverse')
 KEY_DIR = Path('/etc/hamvpn-cloud140')
 SSH_CONF = Path('/etc/ssh/sshd_config.d/70-ham-cloud140-reverse.conf')
 UNIT = Path('/etc/systemd/system/ham-cloud140-reverse.service')
-APT_PACKAGES = {'python3-paramiko', 'python3-nacl', 'python3-bcrypt',
+APT_PACKAGES = {'libsodium23', 'python3-paramiko', 'python3-nacl', 'python3-bcrypt',
                 'python3-cryptography', 'python3-cffi-backend', 'python3-pyasn1', 'python3-six'}
 
 
