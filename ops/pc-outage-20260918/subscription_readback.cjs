@@ -86,4 +86,4 @@ async function main() {
     passed: result.length === request.targets.length && result.every(r => r.mihomo_main_unchanged && r.happ_main_unchanged && r.happ_auto_unchanged)}));
 }
 if (require.main === module) main().catch(() => { console.error('Fresh subscription readback failed; private link was not printed'); process.exitCode = 1; });
-module.exports = {wire, xrayWire, equal};
+module.exports = {wire, xrayWire, equal, deviceHeaders, read};

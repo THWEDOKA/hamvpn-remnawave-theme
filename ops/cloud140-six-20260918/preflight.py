@@ -347,7 +347,7 @@ def public_key(private):
     return base64.urlsafe_b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode().rstrip('=')
 
 
-def export_baseline(api, store):
+def export_baseline(api, store, route_ids=None):
     """SECRET result: active VLESS candidates only, not a success claim.
 
     Hysteria/user-specific subscription handling belongs to the coordinator.
@@ -355,10 +355,15 @@ def export_baseline(api, store):
     never create an account and never expose server private keys/old clients.
     """
     before = baseline(store)
+    if route_ids is not None:
+        require(bool(route_ids) and len(route_ids) == len(set(route_ids)) and
+                set(route_ids) <= {'at', 'pl', 'cz', 'gbpower'}, 'Only remaining selected routes may be exported')
     user = probe_user(api, store)
     nodes = indexed(before['nodes'])
     items, unsupported = [], []
     for route in before['routes']:
+        if route_ids is not None and route['id'] not in route_ids:
+            continue
         profile = before['profiles'][route['profile']]
         require(api('GET', '/api/config-profiles/' + route['profile']) == profile, 'Baseline profile drift')
         node = api('GET', '/api/nodes/' + route['node'])
@@ -399,9 +404,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('snapshot', 'inspect', 'account', 'cleanup', 'export-baseline'))
     parser.add_argument('--secret-stdout', action='store_true')
+    parser.add_argument('--routes', nargs='+', choices=['at', 'pl', 'cz', 'gbpower'])
     args = parser.parse_args()
     try:
         require(args.secret_stdout == (args.action == 'export-baseline'), 'Explicit secret export flag required only for export')
+        require(args.routes is None or args.action == 'export-baseline', 'Route selection is only valid for export')
         require(args.action != 'export-baseline' or not sys.stdout.isatty(), 'Do not export secrets to a terminal')
         os.umask(0o077)
         store = Store()
@@ -425,7 +432,7 @@ def main():
                     account(api, query, store)
                     result = dict(disposable_probe_ready=True, traffic_limit_bytes=LIMIT)
                 elif args.action == 'cleanup': result = cleanup(api, query, store)
-                else: result = export_baseline(api, store)
+                else: result = export_baseline(api, store, args.routes)
             print(json.dumps(result))
     except Exception:
         print(json.dumps(dict(error='PreflightFailed', message='Check protected state; no automatic repeat or secret diagnostic output')), file=sys.stderr)

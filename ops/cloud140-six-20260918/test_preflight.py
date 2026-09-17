@@ -332,6 +332,16 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(KeyError): p.export_baseline(self.f.api, self.f.store)
         self.assertEqual(self.f.calls, [])
 
+    def test_four_route_export_does_not_read_retired_nodes(self):
+        retired = [t for t in p.TARGETS if t['id'] in ('gb', 'us1')]
+        for target in retired:
+            self.f.nodes.pop(target['node'])
+        self.f.calls.clear()
+        with patch.object(p, 'public_key', return_value='fixture-public-key'):
+            result = p.export_baseline(self.f.api, self.f.store, ['at','pl','cz','gbpower'])
+        self.assertFalse(any(i['id'].startswith(('gb-','us1-')) for i in result['items']))
+        self.assertFalse(any(path == '/api/nodes/' + t['node'] for _,path,_ in self.f.calls for t in retired))
+
     def test_profile_drift_fails_export(self):
         self.f.profiles['at-profile']['config']['outbounds'].append(dict(protocol='blackhole'))
         with self.assertRaises(RuntimeError): p.export_baseline(self.f.api, self.f.store)
