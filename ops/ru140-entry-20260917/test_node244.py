@@ -104,6 +104,23 @@ class ArchiveTests(unittest.TestCase):
 
 
 class StagingTests(unittest.TestCase):
+    def test_prepare_marker_contains_serializable_http_not_imported_module(self):
+        site = MagicMock()
+        site.read_text.return_value = node.site_config()
+        connection = MagicMock()
+        response = connection.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b'fixture-site'
+        saved = {}
+        with patch.object(node, 'SITE', site), patch.object(node, 'HTTPConnection', return_value=connection) as connect, \
+             patch.object(node, 'digest', return_value='site-digest'), patch.object(node, 'check_staging_unchanged') as unchanged, \
+             patch.object(node, 'save', side_effect=lambda name, data: saved.__setitem__(name, json.loads(json.dumps(data)))):
+            result = node.complete_prepare('vpn', 'listener', 'backup-hash')
+        self.assertEqual(saved['prepared']['http'], node.site_config())
+        self.assertEqual(connect.call_count, 4)
+        unchanged.assert_called_once_with('vpn', 'listener')
+        self.assertTrue(result['http_ready'])
+
     def test_templates_use_only_http_and_loopback_tls(self):
         http, tls = node.site_config(), node.site_config(tls=True)
         self.assertEqual(re.findall(r'listen\s+([^;]+);', http), ['80'])

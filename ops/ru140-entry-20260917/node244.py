@@ -1,6 +1,7 @@
 """Stage entry244 HTTP/local TLS without disturbing Xray; activation is separate."""
 import argparse
 import hashlib
+from http.client import HTTPConnection
 import json
 import os
 from pathlib import Path
@@ -184,9 +185,14 @@ def prepare():
     ENABLED.symlink_to(SITE)
     # Keep the distro/default site (and any unrelated files) intact.
     run('nginx', '-t'); run('systemctl', 'enable', '--now', 'nginx')
-    import http.client
+    return complete_prepare(identity, listener, checksum)
+
+
+def complete_prepare(identity, listener, checksum):
+    http = site_config()
+    require(SITE.read_text() == http, 'HTTP site differs from the published template')
     for domain in DOMAINS:
-        connection = http.client.HTTPConnection('127.0.0.1', 80, timeout=5)
+        connection = HTTPConnection('127.0.0.1', 80, timeout=5)
         try:
             connection.request('GET', '/', headers={'Host': domain})
             response = connection.getresponse()
@@ -197,6 +203,29 @@ def prepare():
     save('prepared', {'http': http, 'timestamp': time.time(), 'site_sha256': digest(SITE)})
     return {'backup_verified': True, 'backup_sha256': checksum, 'http_ready': True,
             'api_firewall_persistent': True, 'legacy_443_unchanged': True}
+
+
+def resume_prepare():
+    """Verify the fully installed stage after an interrupted marker write only."""
+    require(ENTRY + '/' in run('ip', '-4', 'addr', 'show'), 'Wrong entry server')
+    require(not exists('prepared') and not exists('certificate') and not STREAM.exists(), 'Not an interrupted HTTP stage')
+    require(not STATE.is_symlink() and STATE.stat().st_mode & 0o777 == 0o700, 'Unsafe backup directory')
+    backup = STATE / 'before.tar'
+    require(backup.is_file() and not backup.is_symlink() and backup.stat().st_mode & 0o777 == 0o600, 'Unsafe backup file')
+    proof = read('backup')
+    require(digest(backup) == proof['sha256'], 'Backup changed')
+    run('tar', '-tzf', str(backup))
+    require(not POLICY.exists() and not POLICY.is_symlink(), 'Package service policy still present')
+    require(ENABLED.is_symlink() and ENABLED.resolve() == SITE, 'Unexpected enabled HTTP site')
+    require(digest(FIREWALL) == digest(ROOT / 'firewall244.sh'), 'Firewall helper differs from release')
+    run(str(FIREWALL), 'check')
+    for unit in (FIREWALL_UNIT.name, 'nginx'):
+        run('systemctl', 'is-active', unit)
+        run('systemctl', 'is-enabled', unit)
+    require(subprocess.run(['systemctl', 'is-active', '--quiet', 'certbot.timer'], capture_output=True).returncode == 3,
+            'Certbot timer must remain inactive before DNS move')
+    run('nginx', '-t')
+    return complete_prepare(proof['vpn_identity'], proof['public_443'], proof['sha256'])
 
 
 def certificate():
@@ -352,7 +381,7 @@ def probes():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['prepare', 'certificate', 'renew', 'test', 'arm', 'activate', 'rollback', 'finish', 'probes'])
+    parser.add_argument('action', choices=['prepare', 'resume_prepare', 'certificate', 'renew', 'test', 'arm', 'activate', 'rollback', 'finish', 'probes'])
     args = parser.parse_args()
     print(json.dumps(globals()[args.action](), ensure_ascii=False))
 
