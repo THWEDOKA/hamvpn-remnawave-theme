@@ -256,6 +256,10 @@ def verify(api, published=False):
         wanted = copy.deepcopy(old)
         if old['uuid'] in OLD_HOSTS: wanted.update(legacy_host(old))
         if published and old['uuid'] in TARGET_HOSTS: wanted.update(target_host(old))
+        if concurrent and old['uuid'] in OLD_HOSTS:
+            # We changed only TEST's inbound binding. Preserve later operator
+            # naming/visibility choices; all wire fields remain guarded.
+            for key in ('remark','isDisabled'): wanted[key] = now_hosts[old['uuid']][key]
         assert prior.stable_host(wanted) == prior.stable_host(now_hosts[old['uuid']]), 'Host changed: ' + old['uuid']
     for pid, profile in before['profiles'].items():
         assert api('GET', '/api/config-profiles/' + pid)['config'] == profile['config']
@@ -310,7 +314,11 @@ def rollback(api):
         fields = legacy_host(old) if old['uuid'] in OLD_HOSTS else target_host(old)
         current = indexed[old['uuid']]
         allowed = copy.deepcopy(old); allowed.update(fields)
-        assert prior.stable_host(current) in (prior.stable_host(old), prior.stable_host(allowed)), 'Later host edit; rollback refused'
+        original_allowed = copy.deepcopy(old)
+        if host_is_legacy := old['uuid'] in OLD_HOSTS:
+            for key in ('remark','isDisabled'):
+                allowed[key] = original_allowed[key] = current[key]
+        assert prior.stable_host(current) in (prior.stable_host(original_allowed), prior.stable_host(allowed)), 'Later host edit; rollback refused'
         if prior.stable_host(current) != prior.stable_host(old):
             pending.append({'uuid': old['uuid'], **{k: old[k] for k in fields}})
     if any(exists('dns-' + n['id']) for n in NODES):
