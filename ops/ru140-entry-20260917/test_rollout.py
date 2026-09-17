@@ -41,5 +41,23 @@ class Rollout(unittest.TestCase):
         self.assertIn('ServerAliveCountMax=3',node)
         self.assertIn('--run-deploy-hooks',node)
 
+    def test_entry_is_fail_closed(self):
+        import sys
+        sys.path.insert(0,str(ROOT))
+        import panel
+        profiles={};nodes=json.loads((ROOT/'nodes.json').read_text())
+        for n in nodes:
+            profiles[n['profile']]={'inbounds':[{'uuid':n['inbound'],'tag':'test'}],
+                'config':{'inbounds':[{'tag':'test','streamSettings':{'network':'raw','security':'tls'}}]}}
+        c=panel.candidate(profiles,{'vlessUuid':'00000000-0000-4000-8000-000000000001'})
+        self.assertEqual(c['outbounds'][0],{'tag':'BLOCK','protocol':'blackhole'})
+        self.assertNotIn('freedom',[o['protocol'] for o in c['outbounds']])
+        self.assertEqual(len(c['inbounds']),4)
+        for n,inbound,outbound in zip(nodes,c['inbounds'],c['outbounds'][1:]):
+            self.assertEqual(inbound['listen'],'127.0.0.1')
+            self.assertEqual(inbound['streamSettings']['realitySettings']['target'],'127.0.0.1:8443')
+            self.assertEqual(outbound['settings']['vnext'][0]['address'],'127.0.0.1')
+            self.assertEqual(outbound['settings']['vnext'][0]['port'],n['link'])
+
 
 if __name__=='__main__':unittest.main()

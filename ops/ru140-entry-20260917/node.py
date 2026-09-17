@@ -122,9 +122,23 @@ def test():
     return {'installed_xray_test_passed':True}
 
 
+def compatibility():
+    os.environ.update(DEBIAN_FRONTEND='noninteractive',NEEDRESTART_MODE='l')
+    run('apt-get','install','-y','--no-install-recommends','python3-paramiko')
+    unit=Path('/etc/systemd/system/ham-entry140-link-de182.service')
+    backup=STATE/'de182-original-link.service';assert not backup.exists()
+    text=unit.read_text();assert 'ExecStart=/usr/bin/ssh ' in text
+    shutil.copyfile(unit,backup)
+    lines=text.splitlines()
+    lines=[('ExecStart=/usr/bin/python3 '+str(ROOT/'ssh_link.py')+' --id de182') if line.startswith('ExecStart=') else line for line in lines]
+    unit.write_text('\n'.join(lines)+'\n')
+    run('systemctl','daemon-reload');run('systemctl','restart',unit.name)
+    return {'de182_compatibility_transport_started':True,'same_restricted_key_and_destination':True}
+
+
 def main():
     os.umask(0o077);assert os.geteuid()==0;assert_ip(ENTRY)
-    p=argparse.ArgumentParser();p.add_argument('action',choices=['install','certificate','links','start','test','public-key','renew-test']);p.add_argument('--id',choices=[n['id'] for n in NODES]);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=['install','certificate','links','start','test','public-key','renew-test','compatibility']);p.add_argument('--id',choices=[n['id'] for n in NODES]);a=p.parse_args()
     if a.action=='public-key':
         assert a.id;print((KEYS/(a.id+'.pub')).read_text().strip());return
     if a.action=='renew-test':
