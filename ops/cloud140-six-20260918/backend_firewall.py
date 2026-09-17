@@ -28,7 +28,7 @@ def ipt(*args,allowed=(0,)):
     return call(['iptables','-w','10',*args],allowed)
 
 def rules():
-    return [['-i','lo','-j','ACCEPT'],['-s',p.ENTRY+'/32','-j','ACCEPT'],['-j','REJECT','--reject-with','tcp-reset']]
+    return [['-i','lo','-j','ACCEPT'],['-s',p.ENTRY+'/32','-j','ACCEPT'],['-p','tcp','-j','REJECT','--reject-with','tcp-reset']]
 
 def jump(ip):return ['-d',ip+'/32','-p','tcp','--dport',str(PORT),'-j',CHAIN]
 
@@ -49,7 +49,10 @@ def inspect_chain():
 def expected_chain():
     return ['-N '+CHAIN,'-A '+CHAIN+' -i lo -j ACCEPT',
             '-A '+CHAIN+' -s '+p.ENTRY+'/32 -j ACCEPT',
-            '-A '+CHAIN+' -j REJECT --reject-with tcp-reset']
+            '-A '+CHAIN+' -p tcp -j REJECT --reject-with tcp-reset']
+
+def owned_unit(s,before):
+    return s.get('unit-repair')['unit'] if s.exists('unit-repair') else before['unit']
 
 def references():
     return [line for line in ipt('-S').stdout.splitlines() if ('-j '+CHAIN) in line or ('-g '+CHAIN) in line]
@@ -57,7 +60,7 @@ def references():
 def ensure(identifier):
     s=store(identifier);before=s.get('before');ip=node_ops.TARGETS[identifier]['ip']
     p.require(before['id']==identifier and before['ip']==ip,'Foreign firewall state')
-    p.require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text()==before['unit'],'Owned unit drift')
+    p.require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text()==owned_unit(s,before),'Owned unit drift')
     chain=inspect_chain();wanted=expected_chain()
     if chain is None:
         p.require(not references(),'Missing chain has references')
@@ -81,7 +84,7 @@ def install(identifier):
         s.put('before',dict(id=identifier,ip=runtime['ip'],iptables=snapshot,
                            unit=unit_text(identifier),runtime=runtime,timestamp=time.time()))
     before=s.get('before')
-    p.require(before['unit']==unit_text(identifier),'Release/unit change requires review')
+    p.require(owned_unit(s,before)==unit_text(identifier),'Release/unit change requires review')
     if not UNIT.exists():
         fd=os.open(UNIT,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
         with os.fdopen(fd,'w') as f:f.write(before['unit']);f.flush();os.fsync(f.fileno())
@@ -92,9 +95,25 @@ def install(identifier):
     if not s.exists('installed'):s.put('installed',result)
     return result
 
+def repair_empty(identifier):
+    s=store(identifier);before=s.get('before')
+    p.require(not s.exists('installed') and not s.exists('unit-repair') and not s.exists('rolled-back'),'Only unactivated preparation can be repaired')
+    p.require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text()==before['unit'],'Owned unit drift')
+    p.require(not references() and inspect_chain()==expected_chain()[:3],'Expected only the two unreferenced allow rules')
+    p.require(node_ops.runtime(identifier)['backend_port_free'],'Backend already active')
+    status=call(['systemctl','show',UNIT.name,'-p','ActiveState','--value']).stdout.strip()
+    p.require(status=='inactive','Prepared unit is not inactive')
+    text=unit_text(identifier)
+    s.put('unit-repair',dict(unit=text,timestamp=time.time(),previous_unit_sha256=p.digest(before['unit'])))
+    pending=UNIT.with_suffix('.service.repair')
+    fd=os.open(pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
+    with os.fdopen(fd,'w') as f:f.write(text);f.flush();os.fsync(f.fileno())
+    os.replace(pending,UNIT);call(['systemctl','daemon-reload'])
+    return dict(unactivated_unit_repaired=True,no_live_jump=True)
+
 def rollback(identifier):
     s=store(identifier);before=s.get('before');ip=before['ip']
-    p.require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text()==before['unit'],'Owned unit drift')
+    p.require(UNIT.is_file() and not UNIT.is_symlink() and UNIT.read_text()==owned_unit(s,before),'Owned unit drift')
     p.require(inspect_chain()==expected_chain(),'Owned chain drift')
     expected='-A INPUT -d '+ip+'/32 -p tcp -m tcp --dport '+str(PORT)+' -j '+CHAIN
     p.require(references()==[expected],'Owned jump drift')
@@ -110,11 +129,11 @@ def rollback(identifier):
 def main():
     import fcntl
     os.umask(0o077)
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['install','ensure','rollback']);parser.add_argument('--id',required=True,choices=sorted(ALLOWED));args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['install','ensure','repair-empty','rollback']);parser.add_argument('--id',required=True,choices=sorted(ALLOWED));args=parser.parse_args()
     s=store(args.id);s.secure()
     fd=os.open(s.path/'operation.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
     with os.fdopen(fd,'rb') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX);print(json.dumps(globals()[args.action](args.id)))
+        fcntl.flock(lock,fcntl.LOCK_EX);print(json.dumps(globals()[args.action.replace('-','_')](args.id)))
 
 if __name__=='__main__':
     try:main()

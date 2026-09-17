@@ -135,4 +135,4 @@ async function main() {
     tests: results, live_mihomo_delays: delays}) + '\n');
 }
 if (require.main === module) main().catch(() => { console.error('Matrix stopped; no app settings were changed'); process.exitCode = 1; });
-module.exports = {configuration};
+module.exports = {configuration, test};

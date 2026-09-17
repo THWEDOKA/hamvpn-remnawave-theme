@@ -7,7 +7,7 @@ class Tests(unittest.TestCase):
     def test_chain_never_opens_other_sources(self):
         self.assertEqual(f.rules()[0],['-i','lo','-j','ACCEPT'])
         self.assertEqual(f.rules()[1],['-s','176.108.245.140/32','-j','ACCEPT'])
-        self.assertEqual(f.rules()[-1],['-j','REJECT','--reject-with','tcp-reset'])
+        self.assertEqual(f.rules()[-1],['-p','tcp','-j','REJECT','--reject-with','tcp-reset'])
     def test_withdrawn_routes_rejected(self):
         for route in ('gb','us1','unknown'):
             with self.assertRaises(RuntimeError):f.store(route)
