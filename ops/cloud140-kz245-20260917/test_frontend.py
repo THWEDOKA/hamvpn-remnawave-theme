@@ -85,6 +85,13 @@ class Timers:
 
 
 class SelectedModelTests(unittest.TestCase):
+    def test_host_exclusions_order_not_access_changes(self):
+        original = dict(uuid='one', excludedInternalSquads=['squad-b', 'squad-a'], remark='same')
+        reordered = dict(original, excludedInternalSquads=['squad-a', 'squad-b'])
+        self.assertEqual(c.stable_host(original), c.stable_host(reordered))
+        self.assertNotEqual(c.stable_host(original), c.stable_host(dict(original, excludedInternalSquads=['squad-a'])))
+        with self.assertRaises(c.SafetyError): c.stable_host(dict(original, excludedInternalSquads=['squad-a', 'squad-a']))
+
     def test_single_route_exact_addition_and_no_kz_placeholders(self):
         source = fixture()
         result = model.build_entry_config(source, {'de245': identities()['de245']},

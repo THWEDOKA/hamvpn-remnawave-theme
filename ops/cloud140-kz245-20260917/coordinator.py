@@ -75,7 +75,13 @@ def metadata(profile):
 
 
 def stable_host(host):
-    return {key: value for key, value in host.items() if key not in ('createdAt', 'updatedAt')}
+    value = {key: item for key, item in host.items() if key not in ('createdAt', 'updatedAt')}
+    # List/detail endpoints return this relation in different orders. Membership,
+    # not database row order, defines excluded access; preserve strict comparison
+    # of every other host field and reject malformed/duplicate relation IDs.
+    if 'excludedInternalSquads' in value:
+        value['excludedInternalSquads'] = sorted(ids(value['excludedInternalSquads']))
+    return value
 
 
 def target(route_id):
