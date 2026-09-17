@@ -184,10 +184,14 @@ def frontend_port(node):
     return inbound['port'] if inbound['listen'] == ENTRY else 443
 
 
+def frontend_address(node):
+    return ENTRY if frontend_port(node) != 443 else node['domain']
+
+
 def target_host(host):
     n = next(n for n in NODES if host['uuid'] in n['hosts']); created = read('created')
     return {'inbound': {'configProfileUuid': created['profile'], 'configProfileInboundUuid': created['inbounds'][n['id']]},
-            'address': n['domain'], 'sni': n['domain'], 'host': n['domain'], 'port': frontend_port(n), 'nodes': [NODE],
+            'address': frontend_address(n), 'sni': n['domain'], 'host': n['domain'], 'port': frontend_port(n), 'nodes': [NODE],
             'securityLayer': 'DEFAULT', 'fingerprint': host.get('fingerprint') or 'chrome', 'alpn': None, 'isDisabled': False}
 
 
@@ -196,6 +200,9 @@ def activate(api):
     if exists('direct-prepared'):
         assert exists('direct-staged') and read('installed-test')['installed_xray_test_passed']
         assert read('installed-test')['sha256'] == hashlib.sha256(json.dumps(read('candidate'), sort_keys=True).encode()).hexdigest()
+        ready = read('direct-entry-ready')
+        assert ready['direct_entry_verified'] and ready['sha256'] == read('installed-test')['sha256']
+        assert 0 <= time.time() - ready['timestamp'] < 300
     before = read('before'); created = read('created')
     current = api('GET', '/api/nodes/' + NODE)
     original = next(n for n in before['nodes'] if n['uuid'] == NODE)
@@ -305,7 +312,8 @@ def subscription(api):
         matches = [c for c in configs if c.get('remarks') == remark]; assert len(matches) == 1
         for label, config in [('visible', matches[0]), ('automatic', automatic)]:
             outputs = [o for o in config['outbounds'] if o.get('protocol') == 'vless' and
-                       any(v.get('address') == n['domain'] for v in o.get('settings', {}).get('vnext', []))]
+                       any(v.get('address') == frontend_address(n) and v.get('port') == frontend_port(n)
+                           for v in o.get('settings', {}).get('vnext', []))]
             assert len(outputs) == 1
             outbound = outputs[0]
             assert outbound['streamSettings']['security'] == 'reality'
@@ -338,7 +346,7 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['snapshot', 'baseline', 'probes', 'stage', 'activate', 'verify', 'publish',
-        'rollback', 'subscription', 'finish', 'export-candidate', 'export-backends', 'export-clients', 'accept-test'])
+        'rollback', 'subscription', 'finish', 'export-candidate', 'export-backends', 'export-clients', 'accept-test', 'accept-entry'])
     args = parser.parse_args()
     if args.action == 'export-candidate': print(json.dumps(read('candidate'))); return
     if args.action == 'accept-test':
@@ -346,6 +354,12 @@ def main():
         assert proof['installed_xray_test_passed']
         assert proof['sha256'] == hashlib.sha256(json.dumps(read('candidate'), sort_keys=True).encode()).hexdigest()
         save('installed-test', proof); print('{"installed_config_test_accepted":true}'); return
+    if args.action == 'accept-entry':
+        proof = json.load(sys.stdin)
+        assert proof['direct_entry_verified'] and proof['nginx_public_router_absent']
+        assert proof['sha256'] == hashlib.sha256(json.dumps(read('candidate'), sort_keys=True).encode()).hexdigest()
+        assert 0 <= time.time() - proof['timestamp'] < 300
+        save('direct-entry-ready', proof); print('{"entry_readiness_accepted":true}'); return
     api, _ = prior.create_client()
     if args.action == 'export-backends':
         config = read('candidate')

@@ -36,13 +36,20 @@ class DirectTests(unittest.TestCase):
                     if host['uuid'] in node['hosts']:
                         fields=p.target_host(host)
                         self.assertEqual(fields['port'],d.PORTS[node['id']])
-                        self.assertEqual(fields['address'],node['domain'])
+                        self.assertEqual(fields['address'],p.ENTRY)
+                        self.assertEqual(fields['sni'],node['domain'])
                         self.assertNotIn('isHidden',fields)
                         self.assertNotIn('remark',fields)
 
     def test_historical_loopback_candidate_keeps_443(self):
         with patch.object(p,'read',return_value=self.old):
             self.assertTrue(all(p.frontend_port(node)==443 for node in p.NODES))
+
+    def test_activation_rejects_missing_entry_readiness_before_api(self):
+        state={'candidate':self.new,'installed-test':{'installed_xray_test_passed':True,'sha256':d.checksum(self.new)}}
+        with patch.object(p,'exists',side_effect=lambda name:name in ('direct-prepared','direct-staged')), \
+             patch.object(p,'read',side_effect=lambda name:state[name]):
+            with self.assertRaises(KeyError): p.activate(lambda *args:self.fail('API called before readiness gate'))
 
 
 if __name__=='__main__': unittest.main()

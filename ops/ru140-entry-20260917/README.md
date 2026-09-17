@@ -69,10 +69,14 @@ own-domain REALITY frontends use 18443 (DE3), 18444 (PL2), 18445 (NL), and 18446
 (DE4), with inbound MSS1200 and local HTTPS target127.0.0.1:9443. Public nginx
 stream routing is absent; nginx serves HTTP80 and local HTTPS9443 only.
 Existing reverse-SSH exit channels remain independent and loopback-only.
+Published direct hosts use the entry IP as Address and the own domain as SNI/Host,
+avoiding stale DNS sending the new ports to the old entry. The four website DNS
+records are still migrated and checked. Update the subscription after cutover.
 
 Order: `direct244 prepare`, node244 installed `test`, panel244 `accept-test`,
 `direct244 stage`, fresh node244 backend `probes`, stop isolated diagnostic
-units, `direct244 entry-check`, panel244 `activate` (guarded timer), `probes`,
+units, `direct244 entry-check`, transfer its SHA-bound proof to panel244
+`accept-entry`, panel244 `activate` (guarded timer), `probes`,
 `direct244 sites`, panel244 `publish`, dns244 `move`, real panel244 `subscription`,
 node244 `renew`, `direct244 entry-finish`, panel244 `finish`, test-user cleanup.
 Failed activation rolls back through panel244; no public nginx mutation is

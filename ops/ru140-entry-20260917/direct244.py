@@ -111,8 +111,10 @@ def entry_check(finish=False):
     if finish:
         assert read('renewal')['passed']
         run('systemctl','is-enabled','certbot.timer'); run('systemctl','is-active','certbot.timer')
-    save('direct-entry-finished' if finish else 'direct-entry-ready',{'timestamp':time.time(),'sha256':checksum(config)})
-    return {'direct_entry_verified':True,'renewal_verified':finish,'nginx_public_router_absent':True,'test_443_listener':bool(n.public_443())}
+    result = {'timestamp':time.time(),'sha256':checksum(config),'direct_entry_verified':True,
+              'renewal_verified':finish,'nginx_public_router_absent':True,'test_443_listener':bool(n.public_443())}
+    save('direct-entry-finished' if finish else 'direct-entry-ready',result)
+    return result
 
 
 def sites():
