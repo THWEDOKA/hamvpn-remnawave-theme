@@ -1,0 +1,121 @@
+{
+  "log": {
+    "loglevel": "none"
+  },
+  "inbounds": [
+    {
+      "tag": "ham-nl82-vless-tls",
+      "port": 443,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [],
+        "fallbacks": [
+          {
+            "dest": 9443
+          },
+          {
+            "alpn": "h2",
+            "dest": 9444
+          }
+        ],
+        "decryption": "none"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": [
+            "http/1.1",
+            "h2"
+          ],
+          "serverName": "nl82.torcalc.ru",
+          "fingerprint": "firefox",
+          "certificates": [
+            {
+              "keyFile": "/etc/letsencrypt/live/nl82.torcalc.ru/privkey.pem",
+              "certificateFile": "/etc/letsencrypt/live/nl82.torcalc.ru/fullchain.pem"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "tag": "ham-nl82-hy2",
+      "port": 443,
+      "listen": "0.0.0.0",
+      "protocol": "hysteria",
+      "settings": {
+        "clients": [],
+        "version": 2
+      },
+      "streamSettings": {
+        "network": "hysteria",
+        "security": "tls",
+        "finalmask": {
+          "quicParams": {
+            "debug": false,
+            "congestion": "bbr"
+          }
+        },
+        "tlsSettings": {
+          "alpn": [
+            "h3"
+          ],
+          "serverName": "nl82.torcalc.ru",
+          "certificates": [
+            {
+              "keyFile": "/etc/letsencrypt/live/nl82.torcalc.ru/privkey.pem",
+              "certificateFile": "/etc/letsencrypt/live/nl82.torcalc.ru/fullchain.pem"
+            }
+          ]
+        },
+        "hysteriaSettings": {
+          "version": 2
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "DIRECT",
+      "protocol": "freedom"
+    },
+    {
+      "tag": "BLOCK",
+      "protocol": "blackhole"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "BLOCK"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "geosite:private"
+        ],
+        "outboundTag": "BLOCK"
+      },
+      {
+        "type": "field",
+        "protocol": [
+          "bittorrent"
+        ],
+        "outboundTag": "BLOCK"
+      }
+    ]
+  }
+}

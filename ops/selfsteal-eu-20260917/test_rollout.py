@@ -28,6 +28,18 @@ class Templates(unittest.TestCase):
     def test_python_compiles(self):
         for file in ROOT.glob('*.py'): compile(file.read_text(encoding='utf-8'), str(file), 'exec')
 
+    def test_revised_owner_template(self):
+        for n in json.loads((ROOT / 'nodes.json').read_text(encoding='utf-8')):
+            c = json.loads((ROOT / n['id'] / 'tls-hy2-config.json').read_text())
+            self.assertEqual([i['protocol'] for i in c['inbounds']], ['vless', 'hysteria'])
+            for i in c['inbounds']:
+                self.assertEqual(i['port'], 443)
+                self.assertEqual(i['streamSettings']['security'], 'tls')
+                self.assertNotIn('realitySettings', i['streamSettings'])
+                self.assertIn(n['domain'], i['streamSettings']['tlsSettings']['certificates'][0]['keyFile'])
+            self.assertEqual(c['inbounds'][0]['settings']['fallbacks'], [{'dest': 9443}, {'alpn': 'h2', 'dest': 9444}])
+            self.assertEqual(c['inbounds'][1]['streamSettings']['network'], 'hysteria')
+
     def test_subscription_pool_uses_verified_selector(self):
         source = (ROOT / 'panel.py').read_text(encoding='utf-8')
         self.assertIn("'tags': ['AUTO_BASE_POOL'] if is_hidden else []", source)
