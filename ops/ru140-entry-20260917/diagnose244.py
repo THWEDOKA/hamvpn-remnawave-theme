@@ -46,10 +46,13 @@ def payload(api):
     return {'config': config, 'tests': tests}
 
 
-def start():
+def start(mss=0):
     assert ENTRY + '/' in run('ip','-4','addr','show')
     value = json.load(sys.stdin)
     config = value['config']
+    if mss:
+        for inbound in config['inbounds']:
+            inbound['streamSettings']['sockopt'] = {'tcpMaxSeg': mss}
     assert len(config['inbounds']) == 4
     assert {i['port'] for i in config['inbounds']} == set(PORTS)
     assert all(i['listen'] == ENTRY and len(i['settings']['clients']) == 1 for i in config['inbounds'])
@@ -65,7 +68,7 @@ def start():
         '--property=StandardOutput=append:'+str(STATE/'isolated-diagnostic.log'),
         '--property=StandardError=append:'+str(STATE/'isolated-diagnostic.log'),
         str(binary),'run','-c',str(path))
-    print(json.dumps({'isolated_test_started':True,'ports':PORTS,'auto_stop_seconds':900}))
+    print(json.dumps({'isolated_test_started':True,'ports':PORTS,'auto_stop_seconds':900,'server_mss':mss}))
 
 
 def probe():
@@ -81,9 +84,10 @@ def probe():
 def main():
     os.umask(0o077)
     parser=argparse.ArgumentParser();parser.add_argument('action',choices=['export','start','probe','stop'])
-    action=parser.parse_args().action
+    parser.add_argument('--mss',type=int,choices=[0,1200],default=0)
+    args=parser.parse_args();action=args.action
     if action=='export': print(json.dumps(payload(p.prior.create_client()[0])))
-    elif action=='start': start()
+    elif action=='start': start(args.mss)
     elif action=='probe': probe()
     else:
         run('systemctl','stop',UNIT+'.service')
