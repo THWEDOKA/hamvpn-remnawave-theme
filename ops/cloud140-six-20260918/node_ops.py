@@ -116,9 +116,9 @@ def one_probe(item, binary):
             time.sleep(.1)
         else: raise RuntimeError('Isolated listener unavailable')
         base = ['curl', '-4', '--noproxy', '', '--socks5-hostname', '127.0.0.1:' + str(port),
-                '-fsS', '--connect-timeout', '6', '--max-time', '14']
-        http = run(base + ['-o', '/dev/null', '-w', '%{http_code}', 'https://www.gstatic.com/generate_204'])
-        egress = run(base + ['https://api.ipify.org'])
+                '-fsS', '--connect-timeout', '15', '--max-time', '30']
+        http = run(base + ['-o', '/dev/null', '-w', '%{http_code}', 'https://www.gstatic.com/generate_204'], timeout=35)
+        egress = run(base + ['https://api.ipify.org'], timeout=35)
         exit_ip = egress.stdout.decode().strip() if egress.returncode == 0 else None
         if exit_ip is not None: ipaddress.IPv4Address(exit_ip)
         result.update(http=http.stdout.decode().strip(), exit_ip=exit_ip, curl_codes=[http.returncode, egress.returncode])
