@@ -31,6 +31,7 @@ class Pilot(unittest.TestCase):
     def test_client_tls_without_vision(self):
         out = common.outbound({'vlessUuid': 'test-only'})
         self.assertEqual(out['streamSettings']['security'], 'tls')
+        self.assertEqual(out['streamSettings']['tlsSettings']['alpn'], ['http/1.1'])
         self.assertFalse(out['streamSettings']['tlsSettings']['allowInsecure'])
         self.assertNotIn('flow', out['settings']['vnext'][0]['users'][0])
         self.assertEqual(out['settings']['vnext'][0]['port'], 443)
@@ -41,6 +42,7 @@ class Pilot(unittest.TestCase):
         self.assertFalse(host['isHidden'])
         self.assertTrue(host['isDisabled'])
         self.assertEqual(host['securityLayer'], 'TLS')
+        self.assertEqual(host['alpn'], 'http/1.1')
         self.assertEqual(host['nodes'], [common.NODE])
 
     def test_route_buffers_disabled(self):

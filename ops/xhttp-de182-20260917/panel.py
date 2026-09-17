@@ -124,6 +124,16 @@ def publish(api):
     return {'published': NAME, 'auto_pool_unchanged': True}
 
 
+def host_transport(api):
+    c = read('created'); current = api('GET', '/api/hosts/' + c['host'])
+    assert current['isDisabled'] and current['remark'] == NAME and current['nodes'] == [NODE]
+    assert current['inbound']['configProfileInboundUuid'] == c['inbound']
+    assert current['alpn'] in ('h2,http/1.1', 'http/1.1')
+    api('PATCH', '/api/hosts/', {'uuid': c['host'], 'alpn': 'http/1.1'})
+    assert api('GET', '/api/hosts/' + c['host'])['alpn'] == 'http/1.1'
+    return {'pilot_alpn': 'http/1.1', 'existing_tls_listener_unchanged': True}
+
+
 def subscription(api):
     sub = api('GET', '/api/subscriptions/by-uuid/' + read('test-user')['uuid'])
     request = urllib.request.Request(sub['subscriptionUrl'], headers={'User-Agent': 'Happ/5.7.0',
@@ -142,6 +152,7 @@ def subscription(api):
     assert server['port'] == 443 and not server['users'][0].get('flow')
     assert stream['security'] == 'tls' and stream['tlsSettings']['serverName'] == DOMAIN
     assert not stream['tlsSettings'].get('allowInsecure', False)
+    assert stream['tlsSettings']['alpn'] == ['http/1.1']
     assert stream['xhttpSettings']['path'] == PATH and stream['xhttpSettings']['mode'] == 'packet-up'
     result = test_outbound(out)
     proof = {'time': time.time(), 'public_subscription_http': 200, 'host_count': 1,
@@ -197,7 +208,7 @@ def rollback(api):
 if __name__ == '__main__':
     os.umask(0o077)
     p = argparse.ArgumentParser(); p.add_argument('action', choices=['snapshot', 'create-test', 'before-probes',
-        'apply', 'after-probes', 'verify', 'publish', 'subscription', 'cleanup', 'finish', 'rollback'])
+        'apply', 'after-probes', 'verify', 'host-transport', 'publish', 'subscription', 'cleanup', 'finish', 'rollback'])
     action = p.parse_args().action
     api, query = create_client()
     if action == 'cleanup': result = cleanup(api, query)

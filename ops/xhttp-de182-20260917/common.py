@@ -61,7 +61,7 @@ def ids(squad):
 
 def host_body(inbound):
     return {'remark': NAME, 'address': DOMAIN, 'port': 443, 'host': DOMAIN, 'sni': DOMAIN,
-        'path': PATH, 'alpn': 'h2,http/1.1', 'fingerprint': 'chrome', 'securityLayer': 'TLS',
+        'path': PATH, 'alpn': 'http/1.1', 'fingerprint': 'chrome', 'securityLayer': 'TLS',
         'isDisabled': True, 'isHidden': False, 'tags': [], 'nodes': [NODE],
         'excludedInternalSquads': [],
         'inbound': {'configProfileUuid': PROFILE, 'configProfileInboundUuid': inbound}}
@@ -78,6 +78,9 @@ def outbound(user, protocol='xhttp'):
     stream = {'network': 'xhttp' if protocol == 'xhttp' else 'raw', 'security': 'tls',
         'tlsSettings': {**tls, 'alpn': ['h2', 'http/1.1'], 'fingerprint': 'chrome'}}
     if protocol == 'xhttp':
+        # This unchanged TLS frontend prefers HTTP/1.1. Pin the pilot's HTTP
+        # version to avoid an H2 dialer receiving an HTTP/1.1 fallback response.
+        stream['tlsSettings']['alpn'] = ['http/1.1']
         stream['xhttpSettings'] = {'host': DOMAIN, 'path': PATH, 'mode': 'packet-up'}
     else:
         account['flow'] = 'xtls-rprx-vision'

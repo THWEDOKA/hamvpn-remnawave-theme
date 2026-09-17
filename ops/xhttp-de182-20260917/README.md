@@ -5,6 +5,9 @@ The two current VLESS/TLS and Hysteria2 listeners remain. A third VLESS/XHTTP
 inbound listens only on loopback 10080. Existing trusted TLS on public TCP/443
 terminates at the VLESS fallback, then nginx sends only `/ham-xhttp-pilot/`
 to the new inbound with buffering disabled. Use packet-up on both sides.
+Pin the pilot's client ALPN to HTTP/1.1: the unchanged TLS frontend prefers it,
+and the initial H2 client received an HTTP/1.1 fallback response. The single
+HTTP/1.1 setting passed authenticated probes without changing the old listener.
 The dedicated visible host forces TLS/443, has no Vision flow, and is excluded
 from the normal auto pool by having no AUTO_BASE_POOL tag or hidden counterpart.
 The path is routing, not authentication; existing subscription UUIDs authenticate.
