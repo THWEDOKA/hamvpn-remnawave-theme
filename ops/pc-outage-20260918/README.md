@@ -103,3 +103,33 @@ are preserved. This section describes the workflow, not a deployment claim.
    while retaining the inactive clone and preserving unrelated permissions.
 
 Node helper tests: `node --test ops/pc-outage-20260918/test_local_helpers.cjs`.
+
+## Verified six-node outcome
+
+The isolated profile `HAM-PC-SIX-COMPAT-20260918` was deployed from published
+commit `b3480356c648616ecf8d75781da29e493eb021d6`. Candidate SHA256:
+`252da10b7aabef1011fc64964f439d1eb5b2756425f5b47898d6f963088b0695`.
+All 24 sequential protocol/fingerprint checks passed with HTTPS 204, expected
+egress and removed temporary listeners. The initial concurrent run had six
+local-listener startup failures; it was not accepted as a successful proof.
+The complete sequential rerun, not fabricated or merged successes, is the
+accepted traffic proof (Unix timestamp `1789686558.589`).
+
+Fresh subscription verification at `1789686482.797` confirmed unchanged wire
+credentials for six Mihomo main routes, six Happ main routes and six Happ auto
+members. Live Mihomo delays: NL1 222 ms, NL2 326 ms, NL3 263 ms, NL4 230 ms,
+DE1 340 ms, DE2 319 ms. The user independently confirmed Germany 1 and
+Netherlands 1 work in Koala from Russia. Five other shared-profile consumers
+and G-CONFIG were unchanged. Completion and inactive rollback were read back.
+
+The first staging request was rejected because its proposed profile name
+exceeded the installed API's 30-character limit. No live node or host binding
+had changed. Recovery preserved the original intent/snapshot, checked both
+names absent, retargeted the independent timer to the verified replacement
+release and then issued one guarded create with the valid shorter name.
+
+Germany 5 through CLOUDru was independently rechecked: four protocol/fingerprint
+tests passed with egress 196.251.107.245 and live delay 499 ms, without another
+configuration change. This compatibility repair does not claim that Kazakhstan
+2 or the six paused CLOUDru migrations are complete, or that all carrier paths
+are reachable.
