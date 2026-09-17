@@ -5,7 +5,6 @@ import getpass
 import hashlib
 import json
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 import paramiko
