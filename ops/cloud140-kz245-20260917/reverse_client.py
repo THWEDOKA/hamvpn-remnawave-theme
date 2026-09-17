@@ -11,6 +11,28 @@ from reverse import ENTRY, NODES, KEY_DIR, TARGET, guard, require
 MAX_CHANNELS = 256
 IDLE_TIMEOUT = 300
 HALF_CLOSE_TIMEOUT = 30
+HEALTH_INTERVAL = 15
+HEALTH_TIMEOUT = 15
+
+
+def acknowledged_health(transport):
+    """A denied SSH global request is still a reply; silence is never healthy."""
+    expired = threading.Event()
+    def timeout():
+        expired.set()
+        transport.close()
+    deadline = threading.Timer(HEALTH_TIMEOUT, timeout)
+    deadline.daemon = True
+    deadline.start()
+    try:
+        # OpenSSH answers unsupported requests with REQUEST_FAILURE. Paramiko
+        # returns None for that *received* response, so check active + deadline,
+        # not the response payload. Its default keepalive(wait=False) cannot
+        # detect a path that still accepts writes but loses all response data.
+        transport.global_request('keepalive@openssh.com', wait=True)
+        require(not expired.is_set() and transport.is_active(), 'SSH response deadline exceeded')
+    finally:
+        deadline.cancel()
 
 
 def relay(channel, slots):
@@ -67,7 +89,7 @@ def connect_and_forward(node):
                        timeout=10, banner_timeout=12, auth_timeout=15)
         transport = client.get_transport()
         require(transport is not None and transport.is_authenticated(), 'SSH authentication failed')
-        transport.set_keepalive(15)
+        transport.set_keepalive(0)
         # Paramiko's global forwarding request otherwise has no reply deadline.
         deadline = threading.Timer(20, transport.close); deadline.daemon = True; deadline.start()
         try:
@@ -76,7 +98,11 @@ def connect_and_forward(node):
         finally: deadline.cancel()
         require(actual == node['link'] and transport.is_active(), 'Reverse listener request failed')
         print('Restricted reverse channel authenticated', flush=True)
-        while transport.is_active(): time.sleep(1)
+        while transport.is_active():
+            acknowledged_health(transport)
+            for _ in range(HEALTH_INTERVAL):
+                if not transport.is_active(): break
+                time.sleep(1)
         raise RuntimeError('SSH disconnected; supervisor will reconnect')
     finally:
         try: client.close()

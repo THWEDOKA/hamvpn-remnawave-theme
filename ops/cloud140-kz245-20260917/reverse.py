@@ -368,10 +368,33 @@ def repair_unit(node):
     return {'owned_reverse_unit_updated': True, 'network_admin_capability': False, 'channel_proof_required': True}
 
 
+def upgrade_health(node):
+    """Only replace the owned unit command with this verified release's client."""
+    guard(node['ip']); check_keys(node); secure(UNIT, 0o644)
+    before = UNIT.read_bytes()
+    expected = read('unit-netlink-intent')['after_sha256']
+    require(digest(before) == expected, 'Owned unit changed; health upgrade refused')
+    baseline = service_baseline()
+    text = service_text(node)
+    state_dir()
+    create(STATE / 'unit-before-ack-health.conf', before, 0o600)
+    save('health-upgrade-intent', {'id': node['id'], 'before_sha256': expected,
+                                 'after_sha256': digest(text.encode()), 'services': baseline})
+    pending = UNIT.with_name(UNIT.name + '.pending')
+    create(pending, text.encode(), 0o644); pending.replace(UNIT)
+    run('systemd-analyze', 'verify', str(UNIT)); run('systemctl', 'daemon-reload')
+    run('systemctl', 'restart', UNIT.name)
+    require(service_baseline() == baseline, 'Unrelated service restarted')
+    require(run('systemctl', 'is-enabled', UNIT.name).strip() == 'enabled', 'Reverse service is not persistent')
+    require(run('systemctl', 'is-active', UNIT.name).strip() == 'active', 'Reverse service is not active')
+    save('health-upgraded', {'id': node['id'], 'timestamp': time.time()})
+    return {'acknowledged_health_installed': True, 'unrelated_services_preserved': True, 'traffic_verification_required': True}
+
+
 def main():
     os.umask(0o077)
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['runtime-plan', 'install-runtime', 'generate', 'export-key', 'identity', 'start', 'repair-unit'])
+    p.add_argument('action', choices=['runtime-plan', 'install-runtime', 'generate', 'export-key', 'identity', 'start', 'repair-unit', 'upgrade-health'])
     p.add_argument('--id', choices=[n['id'] for n in NODES]); args = p.parse_args()
     node = next((n for n in NODES if n['id'] == args.id), None)
     if args.action != 'identity' and node is None: p.error('--id is required for exit actions')

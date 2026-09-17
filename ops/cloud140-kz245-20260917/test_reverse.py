@@ -144,6 +144,26 @@ class PolicyTests(unittest.TestCase):
 
 
 class ClientTests(unittest.TestCase):
+    def test_acknowledged_health_accepts_protocol_denial_not_silence(self):
+        transport=MagicMock(); transport.global_request.return_value=None
+        transport.is_active.return_value=True
+        with patch.object(c.threading,'Timer') as timer:c.acknowledged_health(transport)
+        transport.global_request.assert_called_once_with('keepalive@openssh.com',wait=True)
+        timer.return_value.cancel.assert_called_once()
+
+    def test_acknowledged_health_deadline_closes_stuck_transport(self):
+        transport=MagicMock(); transport.is_active.return_value=True
+        def timer_factory(seconds, callback):
+            timer=MagicMock(); timer.start.side_effect=callback; return timer
+        with patch.object(c.threading,'Timer',side_effect=timer_factory),self.assertRaisesRegex(RuntimeError,'deadline'):
+            c.acknowledged_health(transport)
+        transport.close.assert_called_once()
+
+    def test_acknowledged_health_rejects_disconnection(self):
+        transport=MagicMock(); transport.is_active.return_value=False
+        with patch.object(c.threading,'Timer'),self.assertRaisesRegex(RuntimeError,'deadline'):
+            c.acknowledged_health(transport)
+
     def test_no_wildcard_other_identity_port_or_other_loopback(self):
         node=p.NODES[0];slots=threading.BoundedSemaphore(1)
         for dest in [('0.0.0.0',27443),('127.0.0.1',28443),('localhost',27443),('::1',27443)]:
@@ -208,7 +228,7 @@ class ClientTests(unittest.TestCase):
             args=ssh.connect.call_args.kwargs
             self.assertEqual(args['username'],node['user']);self.assertFalse(args['allow_agent']);self.assertFalse(args['look_for_keys'])
             self.assertEqual(transport.request_port_forward.call_args.args,('127.0.0.1',node['link']))
-            transport.set_keepalive.assert_called_once_with(15)
+            transport.set_keepalive.assert_called_once_with(0)
             timer.assert_called_once_with(20,transport.close);timer.return_value.cancel.assert_called_once()
             ssh.exec_command.assert_not_called();transport.open_session.assert_not_called()
             ssh.close.assert_called_once();raw.close.assert_called_once()
