@@ -300,13 +300,17 @@ def finish(api):
 def main():
     os.umask(0o077)
     p=argparse.ArgumentParser();p.add_argument('action',choices=['snapshot','backend','stage','create-test','old-probes','new-probes',
-        'publish','verify','rollback','subscription','cleanup','finish','export-candidate','export-node-key','accept-test']);a=p.parse_args()
+        'publish','verify','rollback','subscription','cleanup','finish','export-candidate','export-node-key','accept-test','export-upstreams','export-clients']);a=p.parse_args()
     if a.action=='export-candidate':print(json.dumps(read('candidate')));return
     if a.action=='accept-test':
         data=json.load(sys.stdin);assert data['installed_xray_test_passed']
         assert data['sha256']==digest(STATE/'candidate.json')
         save('installed-xray-test',data);print('{"accepted":true}');return
     api,query=create_client()
+    if a.action in ('export-upstreams','export-clients'):
+        upstreams=a.action=='export-upstreams'
+        user=api('GET','/api/users/'+read('backend-user' if upstreams else 'test-user')['uuid'])
+        print(json.dumps([{'id':n['id'],'ip':n['ip'],'outbound':upstream(n,read('before')['profiles'],user,True) if upstreams else client(n,user)} for n in NODES]));return
     if a.action=='export-node-key':print(json.dumps(api('GET','/api/keygen/')));return
     if a.action=='cleanup':result=cleanup(api,query)
     elif a.action in ('old-probes','new-probes'):result=probes(api,a.action=='old-probes')
