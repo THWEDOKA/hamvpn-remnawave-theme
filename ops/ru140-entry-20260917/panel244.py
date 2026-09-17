@@ -34,8 +34,10 @@ def candidate(before, service_user):
         tag = 'vless-entry244-' + n['id']
         inbound['tag'] = tag
         inbound['streamSettings']['realitySettings']['target'] = '127.0.0.1:9443'
-        source = next(i for i in before['profiles'][SOURCE_PROFILE]['config']['inbounds']
-                      if i['tag'] == 'vless-entry208-' + n['id'])['streamSettings']['realitySettings']
+        sources = [i for i in before['profiles'][SOURCE_PROFILE]['config']['inbounds']
+                   if i['tag'] == 'vless-entry208-' + n['id']]
+        assert len(sources) == 1, 'Ambiguous source frontend'
+        source = sources[0]['streamSettings']['realitySettings']
         for key in ('privateKey', 'shortIds', 'serverNames'):
             inbound['streamSettings']['realitySettings'][key] = copy.deepcopy(source[key])
         config['inbounds'].append(inbound)
@@ -62,6 +64,10 @@ def snapshot(api):
     node = next(n for n in nodes if n['uuid'] == NODE)
     assert node['address'] == ENTRY and node['isConnected'] and not node['isDisabled']
     assert binding(node) == {'profile': OLD_PROFILE, 'inbounds': [OLD_INBOUND]}
+    for foreign in NODES:
+        current = next(n for n in nodes if n['uuid'] == foreign['node'])
+        assert current['address'] == foreign['ip'] and current['isConnected'] and not current['isDisabled']
+        assert binding(current)['profile'] == foreign['profile'] and foreign['inbound'] in binding(current)['inbounds']
     assert not any(p['name'] == NAME for p in api('GET', '/api/config-profiles/')['configProfiles'])
     hosts = api('GET', '/api/hosts/')
     for h in hosts:
@@ -147,6 +153,7 @@ def stage(api):
     assert not exists('create-intent') and read('installed-test')['installed_xray_test_passed']
     assert read('old-probes')['all_passed']
     config = read('candidate')
+    assert read('installed-test')['sha256'] == hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     save('create-intent', {'name': NAME, 'timestamp': time.time()})
     profile = api('POST', '/api/config-profiles/', {'name': NAME, 'config': config})
     assert profile['config'] == config
@@ -181,6 +188,9 @@ def activate(api):
     assert not exists('activate-intent')
     before = read('before'); created = read('created')
     current = api('GET', '/api/nodes/' + NODE)
+    original = next(n for n in before['nodes'] if n['uuid'] == NODE)
+    assert current['isConnected'] and not current['isDisabled']
+    assert all(current[k] == original[k] for k in ('name', 'address', 'port', 'isDisabled'))
     assert binding(current) == {'profile': OLD_PROFILE, 'inbounds': [OLD_INBOUND]}
     save('activate-intent', {'timestamp': time.time()})
     subprocess.run(['systemd-run', '--unit=' + TIMER, '--on-active=31m', 'python3', str(ROOT / 'panel244.py'), 'rollback'], check=True, capture_output=True)
@@ -229,7 +239,7 @@ def verify(api, published=False):
 def publish(api):
     assert not exists('publish-intent')
     proof = read('new-probes')
-    assert proof['all_passed'] and time.time() - proof['timestamp'] < 1800
+    assert proof['all_passed'] and 0 <= time.time() - proof['timestamp'] < 1800
     verify(api)
     save('publish-intent', {'timestamp': time.time()})
     for host in read('before')['hosts']:
@@ -246,19 +256,29 @@ def rollback(api):
     # On explicit rollback, stop node244's nginx router first. The paired node
     # timer does so one minute before this unattended timer fires.
     before = read('before'); created = read('created')
-    if any(exists('dns-' + n['id']) for n in NODES):
-        import dns244
-        dns244.rollback()
+    current = api('GET', '/api/nodes/' + NODE)
+    old_binding = {'profile': OLD_PROFILE, 'inbounds': [OLD_INBOUND]}
+    new_binding = {'profile': created['profile'], 'inbounds': [created['legacy'], *created['inbounds'].values()]}
+    actual = binding(current)
+    assert any(actual['profile'] == b['profile'] and set(actual['inbounds']) == set(b['inbounds'])
+               for b in (old_binding, new_binding)), 'Later node binding; rollback refused'
+    original = next(n for n in before['nodes'] if n['uuid'] == NODE)
+    assert all(current[k] == original[k] for k in ('name', 'address', 'port', 'isDisabled'))
+    pending = []
+    indexed = {h['uuid']: h for h in api('GET', '/api/hosts/')}
     for old in before['hosts']:
         if old['uuid'] not in OLD_HOSTS | TARGET_HOSTS: continue
         fields = legacy_host(old) if old['uuid'] in OLD_HOSTS else target_host(old)
-        current = next(h for h in api('GET', '/api/hosts/') if h['uuid'] == old['uuid'])
+        current = indexed[old['uuid']]
         allowed = copy.deepcopy(old); allowed.update(fields)
         assert prior.stable_host(current) in (prior.stable_host(old), prior.stable_host(allowed)), 'Later host edit; rollback refused'
         if prior.stable_host(current) != prior.stable_host(old):
-            api('PATCH', '/api/hosts/', {'uuid': old['uuid'], **{k: old[k] for k in fields}})
-    current = api('GET', '/api/nodes/' + NODE)
-    assert binding(current)['profile'] in (OLD_PROFILE, created['profile'])
+            pending.append({'uuid': old['uuid'], **{k: old[k] for k in fields}})
+    if any(exists('dns-' + n['id']) for n in NODES):
+        import dns244
+        dns244.rollback()
+    for body in pending:
+        api('PATCH', '/api/hosts/', body)
     api('PATCH', '/api/nodes/', {'uuid': NODE, 'configProfile': {'activeConfigProfileUuid': OLD_PROFILE, 'activeInbounds': [OLD_INBOUND]}})
     assert binding(api('GET', '/api/nodes/' + NODE)) == {'profile': OLD_PROFILE, 'inbounds': [OLD_INBOUND]}
     save('rollback', {'timestamp': time.time()})
@@ -292,10 +312,14 @@ def subscription(api):
 
 
 def finish(api):
-    assert read('subscription-proof')['all_passed'] and time.time() - read('subscription-proof')['timestamp'] < 1800
+    assert read('subscription-proof')['all_passed'] and 0 <= time.time() - read('subscription-proof')['timestamp'] < 1800
+    assert not exists('rollback'), 'Rollback already occurred'
     result = verify(api, True)
     subprocess.run(['systemctl', 'stop', TIMER + '.timer'], check=True, capture_output=True)
-    assert subprocess.run(['systemctl', 'is-active', '--quiet', TIMER + '.timer']).returncode != 0
+    for suffix in ('.timer', '.service'):
+        assert subprocess.run(['systemctl', 'is-active', '--quiet', TIMER + suffix], capture_output=True).returncode == 3
+    assert not exists('rollback'), 'Rollback raced with finish'
+    result = verify(api, True)
     save('finished', {'timestamp': time.time(), **result})
     return {**result, 'panel_rollback_timer_inactive': True}
 

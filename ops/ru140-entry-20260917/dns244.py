@@ -40,8 +40,9 @@ def verify():
 
 def move():
     proof = read('new-probes')
-    assert exists('published') and proof['all_passed'] and time.time() - proof['timestamp'] < 1800
+    assert exists('published') and proof['all_passed'] and 0 <= time.time() - proof['timestamp'] < 1800
     request = client()
+    pending = []
     for n in NODES:
         rows = request('GET', '?' + urllib.parse.urlencode({'name': n['domain']}))
         assert len(rows) == 1
@@ -51,8 +52,12 @@ def move():
         assert row['content'] in (OLD_ENTRY, ENTRY) and row['ttl'] == 300
         if not exists('dns-' + n['id']):
             assert row['content'] == OLD_ENTRY
+        else:
+            assert read('dns-' + n['id'])['before']['id'] == row['id']
+        pending.append((n, row))
+    for n, row in pending:
+        if not exists('dns-' + n['id']):
             save('dns-' + n['id'], {'before': row, 'wanted': ENTRY})
-        assert read('dns-' + n['id'])['before']['id'] == row['id']
         if row['content'] != ENTRY:
             request('PATCH', '/' + row['id'], {'content': ENTRY, 'ttl': 300, 'proxied': False})
     return verify()
@@ -60,12 +65,15 @@ def move():
 
 def rollback():
     request = client(); restored = 0
+    pending = []
     for n in NODES:
         if not exists('dns-' + n['id']): continue
         old = read('dns-' + n['id'])['before']
         current = request('GET', '/' + old['id'])
         assert all(current[k] == old[k] for k in ('name', 'type', 'proxied', 'ttl'))
         assert current['content'] in (OLD_ENTRY, ENTRY), 'Later DNS change; rollback refused'
+        pending.append((old, current))
+    for old, current in pending:
         if current['content'] == ENTRY:
             request('PATCH', '/' + old['id'], {'content': OLD_ENTRY})
         assert request('GET', '/' + old['id'])['content'] == OLD_ENTRY

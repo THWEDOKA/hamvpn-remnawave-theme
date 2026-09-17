@@ -27,8 +27,7 @@ def remote(target, command, payload=None):
 
 def checked(result):
     if result.returncode:
-        print(result.stderr.decode(errors='replace'), file=sys.stderr)
-        raise RuntimeError('Remote operation failed; inspect state before retry')
+        raise RuntimeError('Remote operation failed (code ' + str(result.returncode) + '); inspect private state before retry')
     return result.stdout
 
 
@@ -62,6 +61,7 @@ def main():
     p.add_argument('--stdin', action='store_true')
     a = p.parse_args()
     commit = subprocess.check_output(['git','rev-parse',a.revision+'^{commit}'],cwd=REPO,text=True).strip()
+    assert commit == subprocess.check_output(['git','rev-parse','origin/main'],cwd=REPO,text=True).strip(), 'Use verified published revision'
     base = '/opt/hamvpn-ru140-entry/releases/' + commit[:12] + '/' + SCOPE + '/'
     if a.action == 'release': print(json.dumps(release(a.target,a.revision)));return
     payload = sys.stdin.buffer.read() if a.stdin else None
