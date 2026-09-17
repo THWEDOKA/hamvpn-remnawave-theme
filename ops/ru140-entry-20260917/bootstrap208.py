@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 
 PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIImx4dGhMrybcEygPjrgS41p6xsDvH//6s5qVyFHOpaF HAMVPN-Codex-Bridge-Admin'

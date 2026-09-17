@@ -103,10 +103,22 @@ def arm():
     return {'entry_rollback_armed': True}
 
 
+def wait_listeners():
+    deadline = time.monotonic() + 20
+    while True:
+        try:
+            for port in (11443, 12443, 13443, 14443, 15443):
+                with socket.create_connection(('127.0.0.1', port), timeout=0.5): pass
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('New listeners not ready; router not written') from None
+            time.sleep(0.25)
+
+
 def activate():
     assert not STREAM.exists()
-    for port in (11443, 12443, 13443, 14443, 15443):
-        with socket.create_connection(('127.0.0.1', port), timeout=5): pass
+    wait_listeners()
     stream = 'stream {\n map $ssl_preread_server_name $entry208_backend {\n default 127.0.0.1:15443;\n'
     stream += ''.join(' ' + n['domain'] + ' 127.0.0.1:' + str(n['port']) + ';\n' for n in NODES)
     stream += ' }\n server { listen 443; listen [::]:443; ssl_preread on; proxy_pass $entry208_backend; proxy_connect_timeout 10s; proxy_timeout 1h; tcp_nodelay on; }\n}\n'

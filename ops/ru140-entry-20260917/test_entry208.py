@@ -1,9 +1,21 @@
 import copy
 import unittest
+from unittest.mock import patch, MagicMock
 import panel208 as p
+import node208
 
 
 class Entry208Tests(unittest.TestCase):
+    def test_listener_startup_race_is_bounded(self):
+        with patch.object(node208.socket, 'create_connection', side_effect=[ConnectionRefusedError(), *[MagicMock() for _ in range(5)]]) as connect:
+            with patch.object(node208.time, 'sleep'):
+                node208.wait_listeners()
+        self.assertEqual(connect.call_count, 6)
+        with patch.object(node208.socket, 'create_connection', side_effect=ConnectionRefusedError()):
+            with patch.object(node208.time, 'monotonic', side_effect=[0, 21]):
+                with self.assertRaises(RuntimeError):
+                    node208.wait_listeners()
+
     def test_preserves_legacy_and_routes_before_direct(self):
         profiles = {}
         for n in p.NODES:

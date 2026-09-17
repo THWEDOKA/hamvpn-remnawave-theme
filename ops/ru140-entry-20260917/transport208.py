@@ -1,5 +1,4 @@
 """Reuse verified binary release transport with the explicitly authorized entry."""
-import sys
 from pathlib import Path
 import transport
 
