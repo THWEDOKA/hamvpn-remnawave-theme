@@ -346,6 +346,12 @@ class ExportTests(unittest.TestCase):
         self.f.profiles['at-profile']['config']['outbounds'].append(dict(protocol='blackhole'))
         with self.assertRaises(RuntimeError): p.export_baseline(self.f.api, self.f.store)
 
+    def test_profile_dynamic_counters_do_not_change_wire(self):
+        self.f.profiles['at-profile']['nodes'] = []
+        self.f.profiles['at-profile']['updatedAt'] = 'later'
+        with patch.object(p, 'public_key', return_value='fixture-public-key'):
+            self.assertTrue(p.export_baseline(self.f.api, self.f.store, ['at'])['items'])
+
     def test_cli_requires_export_flag_before_adapter_or_store(self):
         with patch.object(p.sys, 'argv', ['preflight.py', 'export-baseline']), \
                 patch.object(p, 'Store') as store, patch.object(p.sys, 'stderr', new_callable=io.StringIO) as error:

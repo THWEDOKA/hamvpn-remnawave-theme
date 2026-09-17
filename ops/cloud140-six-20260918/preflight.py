@@ -365,7 +365,10 @@ def export_baseline(api, store, route_ids=None):
         if route_ids is not None and route['id'] not in route_ids:
             continue
         profile = before['profiles'][route['profile']]
-        require(api('GET', '/api/config-profiles/' + route['profile']) == profile, 'Baseline profile drift')
+        live_profile = api('GET', '/api/config-profiles/' + route['profile'])
+        require(live_profile['config'] == profile['config'] and
+                {v['uuid']:v['tag'] for v in live_profile['inbounds']} ==
+                {v['uuid']:v['tag'] for v in profile['inbounds']}, 'Baseline profile drift')
         node = api('GET', '/api/nodes/' + route['node'])
         require(node['address'] == route['ip'] and active(node) == active(nodes[route['node']]), 'Baseline node drift')
         metadata = indexed(profile['inbounds'])
