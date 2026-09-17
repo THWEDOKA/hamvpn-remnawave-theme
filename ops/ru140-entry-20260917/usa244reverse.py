@@ -20,6 +20,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 ENTRY = '193.233.222.244'
+SSH_PORT = 25444
 MANAGEMENT = '162.141.185.208'
 SOURCE = '162.141.185.216'
 NODE = {'id': 'usa2', 'ip': SOURCE, 'link': 25443}
@@ -30,6 +31,7 @@ SSH_CONF = Path('/etc/ssh/sshd_config.d/71-ham-usa244.conf')
 KEY_DIR = Path('/etc/hamvpn-usa244')
 STATE = Path('/root/hamvpn-usa244-20260917')
 UNIT = Path('/etc/systemd/system/ham-usa244-reverse.service')
+LISTENER_UNIT = Path('/etc/systemd/system/ham-usa244-listener.service')
 PROTECTED = (Path('/etc/ssh/sshd_config.d/70-ham-exits244.conf'),
              Path('/var/lib/ham-exits244/.ssh/authorized_keys'))
 NEW_PACKAGES = frozenset({'python3-paramiko', 'python3-nacl', 'python3-bcrypt',
@@ -294,6 +296,42 @@ def stop():
     return {'usa_reverse_service_stopped': True, 'four_channels_untouched': True}
 
 
+def listener():
+    guard(ENTRY)
+    require(read('restricted-identity')['four_channels_preserved'], 'Restricted USA identity required')
+    require(not LISTENER_UNIT.exists(), 'USA SSH listener exists; inspect')
+    with socket.socket() as sock: sock.bind((ENTRY,SSH_PORT))
+    options=['-f','/etc/ssh/sshd_config','-p',str(SSH_PORT),'-o','ListenAddress='+ENTRY,'-o','AllowUsers='+USER,
+             '-o','PidFile=/run/ham-usa244-listener.pid']
+    run('/usr/sbin/sshd','-t',*options)
+    actual=run('/usr/sbin/sshd','-T',*options,'-C','user='+USER+',addr='+SOURCE+',host=entry244')
+    provision().check_policy(actual)
+    fields=dict(line.split(' ',1) for line in actual.splitlines() if ' ' in line)
+    require(fields['allowusers']==USER and fields['port']==str(SSH_PORT), 'Unexpected dedicated listener policy')
+    text=('[Unit]\nDescription=USA-only restricted SSH transport listener\nAfter=network.target\n'
+          '[Service]\nType=simple\nExecStart=/usr/sbin/sshd -D '+ ' '.join(options)+'\n'
+          'Restart=always\nRestartSec=3\n[Install]\nWantedBy=multi-user.target\n')
+    save('listener-intent',{'sha256':hashlib.sha256(text.encode()).hexdigest(),'port':SSH_PORT})
+    write_new(LISTENER_UNIT,text,0o644)
+    run('systemd-analyze','verify',str(LISTENER_UNIT));run('systemctl','daemon-reload')
+    run('systemctl','enable','--now',LISTENER_UNIT.name)
+    require(run('systemctl','is-active',LISTENER_UNIT.name).strip()=='active','Listener inactive')
+    return {'usa_only_ssh_port':SSH_PORT,'root_and_other_users_disallowed':True}
+
+
+def refresh_worker():
+    guard(SOURCE);key_files()
+    previous=UNIT.read_text();intent=read('service-intent')
+    require(hashlib.sha256(previous.encode()).hexdigest()==intent['sha256'],'Owned worker changed')
+    save('worker-before-refresh',{'unit':previous,'intent':intent})
+    text=service_text();pending=UNIT.with_suffix('.pending')
+    write_new(pending,text,0o644);pending.replace(UNIT)
+    run('systemd-analyze','verify',str(UNIT));run('systemctl','daemon-reload')
+    save('service-intent',{'sha256':hashlib.sha256(text.encode()).hexdigest(),'runtime':intent['runtime']})
+    run('systemctl','restart',UNIT.name)
+    return {'usa_worker_updated':True,'ssh_port':SSH_PORT}
+
+
 def worker_module():
     # Import lazily: the entry server needs no Paramiko package for identity().
     worker = isolated_module('_usa244_relay', ROOT / 'reverse244_client.py')
@@ -308,7 +346,7 @@ def connect_and_forward(worker):
     try:
         client.load_host_keys(str(KEY_DIR / 'known_hosts'))
         client.set_missing_host_key_policy(worker.paramiko.RejectPolicy())
-        raw = worker.socket.create_connection((ENTRY, 22), timeout=10, source_address=(SOURCE, 0))
+        raw = worker.socket.create_connection((ENTRY, SSH_PORT), timeout=10, source_address=(SOURCE, 0))
         raw.setsockopt(worker.socket.SOL_SOCKET, worker.socket.SO_KEEPALIVE, 1)
         for name, value in [('TCP_KEEPIDLE', 15), ('TCP_KEEPINTVL', 5), ('TCP_KEEPCNT', 3), ('TCP_USER_TIMEOUT', 45000)]:
             if hasattr(worker.socket, name): raw.setsockopt(worker.socket.IPPROTO_TCP, getattr(worker.socket, name), value)
@@ -340,7 +378,7 @@ def worker():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['generate', 'export-key', 'identity', 'start', 'stop', 'worker'])
+    parser.add_argument('action', choices=['generate', 'export-key', 'identity', 'start', 'stop', 'worker','listener','refresh-worker'])
     action = parser.parse_args().action
     try:
         result = globals()[action.replace('-', '_')]()

@@ -319,7 +319,7 @@ class WorkerTests(unittest.TestCase):
              patch.object(self.worker.socket, 'create_connection', return_value=raw) as connect, \
              contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, 'disconnected'):
             u.connect_and_forward(self.worker)
-        connect.assert_called_once_with((u.ENTRY, 22), timeout=10, source_address=(u.SOURCE, 0))
+        connect.assert_called_once_with((u.ENTRY, u.SSH_PORT), timeout=10, source_address=(u.SOURCE, 0))
         ssh.load_host_keys.assert_called_once_with(str(u.KEY_DIR / 'known_hosts'))
         self.assertIsInstance(ssh.set_missing_host_key_policy.call_args.args[0], self.worker.paramiko.RejectPolicy)
         args = ssh.connect.call_args.kwargs

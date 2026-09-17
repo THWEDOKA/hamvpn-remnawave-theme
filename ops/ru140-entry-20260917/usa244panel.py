@@ -131,6 +131,7 @@ def backend_probe():
 def activate(api):
     assert not exists('activate-intent')
     before=read('before');config=read('candidate');digest=checksum(config)
+    assert_preserved(config,before['profile']['config'])
     assert read('installed-test')['installed_xray_test_passed'] and read('installed-test')['sha256']==digest
     proof=read('backend-proof');assert proof['backend_passed'] and proof['sha256']==digest and 0<=time.time()-proof['timestamp']<600
     assert api('GET','/api/config-profiles/'+before['profile']['uuid'])['config']==before['profile']['config']
@@ -245,6 +246,18 @@ def rollback(api):
     api('PATCH','/api/nodes/',{'uuid':NODE,'configProfile':{'activeConfigProfileUuid':old_binding['profile'],'activeInbounds':old_binding['inbounds']}})
     if profile['config']==config:api('PATCH','/api/config-profiles/',{'uuid':profile['uuid'],'config':before['profile']['config']})
     assert api('GET','/api/config-profiles/'+profile['uuid'])['config']==before['profile']['config']
+    restored=p.binding(api('GET','/api/nodes/'+NODE))
+    assert restored['profile']==old_binding['profile'] and set(restored['inbounds'])==set(old_binding['inbounds'])
+    after_hosts={h['uuid']:h for h in api('GET','/api/hosts/')}
+    for host in before['hosts']:assert p.prior.stable_host(after_hosts[host['uuid']])==p.prior.stable_host(host)
+    for identifier in p.TARGET_HOSTS:assert p.prior.stable_host(after_hosts[identifier])==before['other_hosts'][identifier]
+    original_backend=read('prepare-intent')['backend_squad_before']
+    if SOURCE_INBOUND not in p.ids(original_backend):
+        current_backend=api('GET','/api/internal-squads/'+original_backend['uuid'])
+        assert set(p.ids(original_backend))<=set(p.ids(current_backend))
+        wanted=[i for i in p.ids(current_backend) if i!=SOURCE_INBOUND]
+        result=api('PATCH','/api/internal-squads/',{'uuid':original_backend['uuid'],'inbounds':wanted})
+        assert set(p.ids(result))==set(wanted)
     save('rollback',{'timestamp':time.time()});return {'previous_four_routes_restored':True,'usa2_hosts_restored':True}
 
 
