@@ -16,12 +16,27 @@ UNIT = 'ham-entry244-isolated-diagnostic'
 PORTS = (18443, 18444, 18445, 18446)
 
 
-def payload(api):
+def payload(api, all_exits=False):
     user = p.user(api)
     candidate = read('candidate')
     own = next(i for i in candidate['inbounds'] if i['tag'] == 'vless-entry244-de182')
     legacy = candidate['inbounds'][0]
     upstream = next(o for o in candidate['outbounds'] if o['tag'] == 'exit-de182')
+    if all_exits:
+        config={'log':{'loglevel':'warning'},'inbounds':[],'outbounds':[],'routing':{'rules':[]}}
+        tests=[]
+        for node,port in zip(p.NODES,PORTS):
+            inbound=copy.deepcopy(next(i for i in candidate['inbounds'] if i['tag']=='vless-entry244-'+node['id']))
+            inbound.update(listen=ENTRY,port=port)
+            inbound['settings']['clients']=[{'id':user['vlessUuid'],'flow':'xtls-rprx-vision'}]
+            config['inbounds'].append(inbound)
+            config['outbounds'].append(copy.deepcopy(next(o for o in candidate['outbounds'] if o['tag']=='exit-'+node['id'])))
+            config['routing']['rules'].append({'type':'field','inboundTag':[inbound['tag']],'outboundTag':'exit-'+node['id']})
+            for fingerprint in ('chrome','firefox'):
+                client=p.reality_client(inbound,user,ENTRY,node['domain'],fingerprint)
+                client['settings']['vnext'][0]['port']=port
+                tests.append({'id':node['id']+'-'+fingerprint,'ip':node['ip'],'outbound':client})
+        return {'config':config,'tests':tests}
     config = {'log': {'loglevel': 'debug'}, 'inbounds': [], 'outbounds': [copy.deepcopy(upstream),
               {'protocol': 'freedom', 'tag': 'DIAGNOSTIC-DIRECT'}], 'routing': {'rules': []}}
     tests = []
@@ -71,11 +86,11 @@ def start(mss=0):
     print(json.dumps({'isolated_test_started':True,'ports':PORTS,'auto_stop_seconds':900,'server_mss':mss}))
 
 
-def probe():
-    value = payload(p.prior.create_client()[0])
+def probe(all_exits=False):
+    value = payload(p.prior.create_client()[0],all_exits)
     tests = []
     for item in value['tests']:
-        for attempt in range(2):
+        for attempt in range(1 if all_exits else 2):
             result = {'id':item['id'],'attempt':attempt+1,**p.test_one(item['outbound'],item['ip'])}
             tests.append(result); print(json.dumps(result),flush=True)
     save('isolated-diagnostic-proof',{'timestamp':time.time(),'tests':tests})
@@ -102,10 +117,11 @@ def main():
     os.umask(0o077)
     parser=argparse.ArgumentParser();parser.add_argument('action',choices=['export','start','probe','stop','nginx-test'])
     parser.add_argument('--mss',type=int,choices=[0,1200],default=0)
+    parser.add_argument('--all-exits',action='store_true')
     args=parser.parse_args();action=args.action
-    if action=='export': print(json.dumps(payload(p.prior.create_client()[0])))
+    if action=='export': print(json.dumps(payload(p.prior.create_client()[0],args.all_exits)))
     elif action=='start': start(args.mss)
-    elif action=='probe': probe()
+    elif action=='probe': probe(args.all_exits)
     elif action=='nginx-test': nginx_test()
     else:
         run('systemctl','stop',UNIT+'.service')
