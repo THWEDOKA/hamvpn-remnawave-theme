@@ -329,7 +329,7 @@ def service_text(node):
         'Environment=PYTHONNOUSERSITE=1\nRestart=always\nRestartSec=5\nTimeoutStopSec=15\n'
         'NoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\n'
         'UMask=0077\nCapabilityBoundingSet=\nRestrictSUIDSGID=true\n'
-        'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nLimitNOFILE=8192\nTasksMax=320\n'
+        'RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK\nLimitNOFILE=8192\nTasksMax=320\n'
         '[Install]\nWantedBy=multi-user.target\n')
 
 
@@ -350,10 +350,28 @@ def start(node):
     return {'id': node['id'], 'service_started': True, 'channel_and_backend_proof_still_required': True}
 
 
+def repair_unit(node):
+    """Permit read-only interface inventory; CAP_NET_ADMIN remains unavailable."""
+    guard(node['ip']); check_keys(node)
+    intent = read('start-intent'); secure(UNIT, 0o644)
+    require(intent['id'] == node['id'] and digest(UNIT.read_bytes()) == intent['unit_sha256'],
+            'Owned unit changed; repair refused')
+    state_dir()
+    create(STATE / 'unit-before-netlink.conf', UNIT.read_bytes(), 0o600)
+    text = service_text(node)
+    require('CapabilityBoundingSet=\n' in text and 'AF_NETLINK' in text, 'Unexpected capabilities')
+    save('unit-netlink-intent', {'before_sha256': intent['unit_sha256'], 'after_sha256': digest(text.encode())})
+    pending = UNIT.with_name(UNIT.name + '.pending')
+    create(pending, text.encode(), 0o644); pending.replace(UNIT)
+    run('systemd-analyze', 'verify', str(UNIT)); run('systemctl', 'daemon-reload')
+    run('systemctl', 'restart', UNIT.name)
+    return {'owned_reverse_unit_updated': True, 'network_admin_capability': False, 'channel_proof_required': True}
+
+
 def main():
     os.umask(0o077)
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=['runtime-plan', 'install-runtime', 'generate', 'export-key', 'identity', 'start'])
+    p.add_argument('action', choices=['runtime-plan', 'install-runtime', 'generate', 'export-key', 'identity', 'start', 'repair-unit'])
     p.add_argument('--id', choices=[n['id'] for n in NODES]); args = p.parse_args()
     node = next((n for n in NODES if n['id'] == args.id), None)
     if args.action != 'identity' and node is None: p.error('--id is required for exit actions')
