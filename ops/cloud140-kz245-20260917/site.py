@@ -323,6 +323,20 @@ def http_get(domain, path='/', address='127.0.0.1'):
         connection.close()
 
 
+def wait_http_ready():
+    # nginx reload returns before the new workers necessarily accept connections.
+    # Old workers can briefly answer with the previous default virtual host.
+    last = None
+    for attempt in range(30):
+        try:
+            return challenge()
+        except (RuntimeError, OSError) as error:
+            last = error
+            if attempt < 29:
+                time.sleep(.2)
+    raise last
+
+
 def challenge():
     guard()
     verify_backup()
@@ -398,7 +412,7 @@ def http():
         ENABLED.symlink_to(SITE)
     try:
         reload_checked(intent['before'])
-        return challenge()
+        return wait_http_ready()
     except Exception:
         require(not SITE.is_symlink() and SITE.read_text() == site_config()
                 and ENABLED.is_symlink() and ENABLED.resolve() == SITE, 'Concurrent site change; rollback refused')
