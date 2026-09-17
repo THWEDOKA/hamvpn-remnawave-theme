@@ -10,6 +10,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -20,7 +21,7 @@ SOURCE = 'd354e2ac-4b86-40a7-a0b3-ef9499d329b1'
 INBOUND = '41b6c310-32dd-4845-acc6-816ed48e2ff9'
 TAG = 'vless-reality-shared'
 NEW_TAG = 'vless-reality-pc-six-20260918'
-NAME = 'HAM-PC-MIHOMO-SIX-COMPAT-20260918'
+NAME = 'HAM-PC-SIX-COMPAT-20260918'
 TARGETS = {
     'nl1': ('83.217.194.44', 'a4029bb7-a591-450a-913d-6f204d965629',
             '599df985-92a0-4865-b535-feb431ef7cb3', 'b803897d-e2fa-4698-99ce-49477a8c1bf6'),
@@ -37,6 +38,11 @@ TARGETS = {
 }
 NODE_IDS = {t[1] for t in TARGETS.values()}
 HOST_IDS = {h for t in TARGETS.values() for h in t[2:]}
+
+
+def valid_profile_name(name):
+    # Installed Remnawave create-config-profile.command.js contract.
+    return isinstance(name, str) and 2 <= len(name) <= 30 and re.fullmatch(r'[A-Za-z0-9_\s-]+', name) is not None
 
 
 def binding(node):
@@ -89,6 +95,12 @@ class Timer(base.Timer):
                   '/usr/bin/python3', str(Path(__file__).resolve()), 'rollback'])
         require(self.active(), 'Rollback timer was not armed')
 
+    def verify_script(self):
+        output = self.run(['systemctl', 'show', self.unit + '.service', '-p', 'ExecStart', '--value'])
+        require(str(Path(__file__).resolve()) in output and 'rollback' in output,
+                'Rollback service does not target the current published helper')
+        return True
+
 
 class Operation:
     def __init__(self, api, store, timer, clock=time.time):
@@ -103,6 +115,7 @@ class Operation:
 
     def plan(self):
         require(not self.store.exists('before'), 'Snapshot already exists')
+        require(valid_profile_name(NAME), 'Clone name violates the installed API contract')
         ns, hs, ss, source = self.collect()
         require(source['uuid'] == SOURCE and {i['uuid'] for i in source['inbounds']} == {INBOUND}, 'Source metadata changed')
         for ip, nid, main, auto in TARGETS.values():
@@ -200,12 +213,36 @@ class Operation:
         require(self.timer.active(), 'Rollback timer required')
         if not clone:
             if not self.store.exists('clone-intent'):
+                require(valid_profile_name(NAME), 'Clone name violates the installed API contract')
                 self.store.put('clone-intent', dict(name=NAME, sha256=before['sha256'], timestamp=self.clock()))
                 result = self.api('POST', '/api/config-profiles/', dict(name=NAME, config=before['candidate']))
             else:
-                matches = [p for p in self.api('GET', '/api/config-profiles/')['configProfiles'] if p['name'] == NAME]
-                require(len(matches) == 1, 'Uncertain clone creation requires operator review')
-                result = self.api('GET', '/api/config-profiles/' + matches[0]['uuid'])
+                intent = self.store.get('clone-intent')
+                require(intent['sha256'] == before['sha256'], 'Original clone intent changed')
+                profiles = self.api('GET', '/api/config-profiles/')['configProfiles']
+                matches = [p for p in profiles if p['name'] == NAME]
+                if intent['name'] != NAME:
+                    require(isinstance(intent['name'], str) and len(intent['name']) > 30 and
+                            valid_profile_name(NAME) and not any(p['name'] == intent['name'] for p in profiles),
+                            'Old-name retry is not a proven rejected-name request')
+                    require(self.store.exists('empty-stage-rearmed'), 'Retarget the old-version rollback before name retry')
+                    rearmed = self.store.get('empty-stage-rearmed')
+                    require(rearmed['name'] == NAME and rearmed['sha256'] == before['sha256'] and
+                            rearmed['rollback_script_verified'] is True, 'Invalid retargeted rollback proof')
+                    if not self.store.exists('clone-name-retry-intent'):
+                        require(not matches, 'Retry target already exists without ownership intent')
+                        self.store.put('clone-name-retry-intent', dict(old_name=intent['name'], name=NAME,
+                            sha256=before['sha256'], old_and_new_absent=True, timestamp=self.clock()))
+                        result = self.api('POST', '/api/config-profiles/', dict(name=NAME, config=before['candidate']))
+                    else:
+                        retry = self.store.get('clone-name-retry-intent')
+                        require(retry['name'] == NAME and retry['old_name'] == intent['name'] and
+                                retry['sha256'] == before['sha256'] and retry['old_and_new_absent'] is True and
+                                len(matches) == 1, 'Uncertain name retry requires operator review')
+                        result = self.api('GET', '/api/config-profiles/' + matches[0]['uuid'])
+                else:
+                    require(len(matches) == 1, 'Uncertain clone creation requires operator review')
+                    result = self.api('GET', '/api/config-profiles/' + matches[0]['uuid'])
             require(result['name'] == NAME and result['config'] == before['candidate'] and
                     len(result['inbounds']) == 1 and result['inbounds'][0]['tag'] == NEW_TAG and
                     result['uuid'] not in before['initial_profiles'], 'Clone readback differs')
@@ -221,6 +258,31 @@ class Operation:
         self.guard()
         if not self.store.exists('staged'): self.store.put('staged', dict(timestamp=self.clock()))
         return dict(staged=True, sha256=before['sha256'])
+
+    def rearm_empty_stage(self):
+        before, ns, hs, _, clone = self.guard()
+        require(clone is None and self.store.exists('stage-intent') and self.store.exists('clone-intent') and
+                not any(self.store.exists(k) for k in ('clone', 'clone-name-retry-intent', 'staged', 'apply-intent',
+                                                      'applied', 'finished', 'rolled-back', 'empty-stage-rearmed')),
+                'Only the unmutated rejected-name stage can be retargeted')
+        require(all(binding(ns[nid]) == old['binding'] for nid, old in before['nodes'].items()) and
+                all(stable_host(hs[hid]) == old for hid, old in before['hosts'].items()) and
+                not any(self.store.exists('grant-' + sid) for sid in before['rights']), 'Live bindings or grants were already changed')
+        intent = self.store.get('clone-intent')
+        require(intent['sha256'] == before['sha256'] and intent['name'] != NAME and
+                isinstance(intent['name'], str) and len(intent['name']) > 30 and valid_profile_name(NAME),
+                'Not the rejected invalid-name request')
+        profiles = self.api('GET', '/api/config-profiles/')['configProfiles']
+        require(not any(p['name'] in (NAME, intent['name']) for p in profiles), 'Clone exists; empty-stage retarget is unsafe')
+        if not self.store.exists('empty-stage-rearm-intent'):
+            self.store.put('empty-stage-rearm-intent', dict(timestamp=self.clock(), name=NAME,
+                sha256=before['sha256'], script=str(Path(__file__).resolve()), old_and_new_absent=True))
+        self.timer.cancel()  # verifies both old timer and service are inactive
+        self.timer.arm()     # uses this verified release's own __file__
+        require(self.timer.verify_script(), 'New rollback target is not verified')
+        self.store.put('empty-stage-rearmed', dict(timestamp=self.clock(), name=NAME, sha256=before['sha256'],
+            script=str(Path(__file__).resolve()), rollback_script_verified=True))
+        return dict(empty_stage_rearmed=True, rollback_seconds=900, sha256=before['sha256'])
 
     def apply(self):
         before, _, _, _, clone = self.guard(healthy=True)
@@ -303,7 +365,7 @@ class Operation:
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['plan', 'export-candidate', 'accept-installed', 'stage', 'apply', 'rollback', 'accept-subscription', 'finish', 'status'])
+    parser.add_argument('action', choices=['plan', 'export-candidate', 'accept-installed', 'rearm-empty-stage', 'stage', 'apply', 'rollback', 'accept-subscription', 'finish', 'status'])
     parser.add_argument('--secret-stdout', action='store_true')
     args = parser.parse_args()
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'selfsteal-us3'))
@@ -318,7 +380,7 @@ def main():
             before, _, _, _, clone = op.guard()
             result = dict(sha256=before['sha256'], clone_staged=bool(clone), applied=store.exists('applied'),
                           finished=store.exists('finished'), rollback_active=op.timer.active())
-        else: result = getattr(op, args.action)()
+        else: result = getattr(op, args.action.replace('-', '_'))()
     print(json.dumps(result))
 
 

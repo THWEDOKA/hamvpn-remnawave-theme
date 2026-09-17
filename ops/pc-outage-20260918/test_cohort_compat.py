@@ -17,6 +17,7 @@ class Timer:
     def active(self): return self.armed
     def arm(self): self.armed = True
     def cancel(self): self.armed = False
+    def verify_script(self): return True
 
 
 def fixture_config():
@@ -111,6 +112,12 @@ class Tests(unittest.TestCase):
             config = fixture_config(); config['inbounds'][0]['streamSettings']['realitySettings']['minClientVer'] = value
             with self.assertRaises(RuntimeError): c.candidate(config)
 
+    def test_profile_name_matches_installed_contract(self):
+        self.assertTrue(c.valid_profile_name(c.NAME))
+        self.assertTrue(c.valid_profile_name('A' * 30))
+        for name in ('A', 'A'*31, 'bad/name', 'HAM-PC-MIHOMO-SIX-COMPAT-20260918'):
+            self.assertFalse(c.valid_profile_name(name))
+
     def test_old_core_target_refused(self):
         self.api.nodes[next(iter(c.NODE_IDS))]['versions']['xray'] = '26.3.27'
         with self.assertRaises(RuntimeError): self.op.plan()
@@ -163,6 +170,53 @@ class Tests(unittest.TestCase):
     def test_stage_and_apply_are_resumable(self):
         self.ready(); self.op.stage(); self.op.stage(); self.op.apply(); self.op.apply()
         self.assertEqual(sum(method=='POST' for method,_,_ in self.api.writes),1)
+
+    def rejected_name_intent(self):
+        self.ready()
+        self.store.put('stage-intent', {'timestamp': 999})
+        self.timer.arm()
+        self.store.put('clone-intent', dict(name='HAM-PC-MIHOMO-SIX-COMPAT-20260918',
+                       sha256=self.op.load()['sha256'], timestamp=999))
+
+    def test_rejected_old_name_one_explicit_proven_absent_retry(self):
+        self.rejected_name_intent(); original = self.store.get('clone-intent')
+        self.op.rearm_empty_stage()
+        self.op.stage(); self.op.stage()
+        self.assertEqual(sum(method=='POST' for method,_,_ in self.api.writes), 1)
+        self.assertEqual(self.store.get('clone-intent'), original)
+        self.assertTrue(self.store.get('clone-name-retry-intent')['old_and_new_absent'])
+
+    def test_name_retry_never_overwrites_foreign_new_name(self):
+        self.rejected_name_intent()
+        self.op.rearm_empty_stage()
+        self.api.profiles['foreign'] = dict(uuid='foreign', name=c.NAME, config=self.op.load()['candidate'], inbounds=[])
+        with self.assertRaises(RuntimeError): self.op.stage()
+        self.assertFalse(self.store.exists('clone-name-retry-intent'))
+        self.assertEqual(self.api.writes, [])
+
+    def test_uncertain_retry_never_reposts_without_created_object(self):
+        self.rejected_name_intent()
+        self.op.rearm_empty_stage()
+        intent = self.store.get('clone-intent')
+        self.store.put('clone-name-retry-intent', dict(old_name=intent['name'], name=c.NAME,
+                       sha256=self.op.load()['sha256'], old_and_new_absent=True, timestamp=999))
+        with self.assertRaises(RuntimeError): self.op.stage()
+        self.assertEqual(self.api.writes, [])
+
+    def test_invalid_name_stage_cannot_create_before_timer_retarget(self):
+        self.rejected_name_intent()
+        with self.assertRaises(RuntimeError): self.op.stage()
+        self.assertEqual(self.api.writes, [])
+
+    def test_retarget_requires_both_profile_names_absent(self):
+        self.rejected_name_intent()
+        self.api.profiles['foreign'] = dict(uuid='foreign',name=c.NAME)
+        with self.assertRaises(RuntimeError): self.op.rearm_empty_stage()
+        self.assertFalse(self.store.exists('empty-stage-rearmed'))
+
+    def test_retarget_is_not_a_way_to_extend_active_deployment(self):
+        self.ready(); self.op.stage(); self.op.apply()
+        with self.assertRaises(RuntimeError): self.op.rearm_empty_stage()
 
     def test_partial_apply_can_rollback(self):
         original = deepcopy(self.api.hosts); self.ready(); self.op.stage(); self.api.fail_host_once = True
