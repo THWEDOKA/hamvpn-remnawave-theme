@@ -33,6 +33,8 @@ class Templates(unittest.TestCase):
         self.assertIn('64.225.109.248/32', source)
         self.assertNotIn('iptables -F', source)
         self.assertNotIn('--dport 22 ', source)
+        self.assertEqual((ROOT / '.gitattributes').read_text().strip(), '* text eol=lf')
+        self.assertIn("run('systemctl', 'is-active', '--quiet', unit.name)", (ROOT / 'node.py').read_text())
 
     def test_fresh_candidate_does_not_mutate_shared_profile(self):
         spec = importlib.util.spec_from_file_location('eu_panel', ROOT / 'panel.py')

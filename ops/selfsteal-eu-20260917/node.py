@@ -112,6 +112,9 @@ def start(n):
     assert not unit.exists()
     unit.write_text('[Unit]\nDescription=HAMVPN node management isolation\nBefore=docker.service\nAfter=network-pre.target\nWants=network-pre.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/local/sbin/hamvpn-selfsteal-firewall\n\n[Install]\nWantedBy=multi-user.target\n')
     run('systemctl', 'daemon-reload'); run('systemctl', 'enable', '--now', unit.name)
+    run('systemctl', 'is-active', '--quiet', unit.name)
+    run('iptables', '-C', 'INPUT', '-p', 'tcp', '--dport', '2222', '-j', 'HAM_SS_API')
+    run('ip6tables', '-C', 'INPUT', '-p', 'tcp', '--dport', '2222', '-j', 'DROP')
     command = ['docker', 'compose'] if subprocess.run(['docker', 'compose', 'version'], capture_output=True).returncode == 0 else ['docker-compose']
     run(*command, '-f', str(compose), 'up', '-d')
     print(json.dumps({'started': n['id'], 'management_panel_only': True, 'host_network': True}))
