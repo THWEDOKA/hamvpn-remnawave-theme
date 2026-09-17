@@ -8,6 +8,7 @@ Commands are operator-controlled; callers must request only safe output.
 import base64
 import getpass
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -18,8 +19,9 @@ from inventory import TARGETS
 REPO = Path(__file__).resolve().parents[2]
 SCOPE = 'ops/cloud140-six-20260918'
 SHARED = 'ops/cloud140-kz245-20260917'
-sys.path.insert(0, str(REPO / SHARED))
-import transport
+_spec = importlib.util.spec_from_file_location('cloud140_six_operator_transport', REPO / SHARED / 'transport.py')
+transport = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(transport)
 
 RELAY = r'''
 import sys,json,os,tempfile,subprocess,base64,concurrent.futures

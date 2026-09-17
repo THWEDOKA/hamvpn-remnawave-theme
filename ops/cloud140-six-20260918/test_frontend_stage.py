@@ -57,7 +57,11 @@ class FrontendTests(unittest.TestCase):
         for host in self.exit.baseline.data['before']['hosts']:
             host.update(host=None, sni='example.com', viewPosition=4)
         entry = fixture.profiles['entry-profile']
-        first = entry['config']['inbounds'][0]; first['port'] = 443
+        first = entry['config']['inbounds'][0]; first.update(port=11443, listen='127.0.0.1')
+        for port in (12443, 13443, 14443):
+            previous = deepcopy(first); previous.update(tag='entry-legacy-' + str(port), port=port)
+            entry['config']['inbounds'].append(previous)
+            entry['inbounds'].append(dict(tag=previous['tag'], uuid='entry-legacy-inbound-' + str(port)))
         second = deepcopy(first); second.update(tag='entry-de245', port=18444)
         entry['config']['inbounds'].append(second)
         entry['inbounds'].append(dict(tag='entry-de245', uuid='entry-de245-inbound'))
@@ -86,7 +90,8 @@ class FrontendTests(unittest.TestCase):
     def inputs(self):
         now = self.exit.now
         value = dict(runtime=dict(id='entry', node=f.p.ENTRY_ID, ip=f.p.ENTRY, timestamp=now,
-            port=f.PORTS[self.route_id], port_free=True, namespace_verified=True, firewall_ready=True, xray_version='26.7.28'),
+            port=f.PORTS[self.route_id], port_free=True, namespace_verified=True, firewall_ready=True,
+            legacy443listening_nginx_verified=True, xray_version='26.7.28'),
             site=dict(entry=f.p.ENTRY, timestamp=now, loopback_port=9444, chain_verified=True,
                 certificate_valid=True, dns_verified=True, checks=[dict(sni=d, tls='TLSv1.3', alpn='h2') for d in sorted(f.DOMAINS)],
                 https_sites=[dict(sni=d, status=200, sha256='c' * 64) for d in sorted(f.DOMAINS)],
@@ -160,6 +165,31 @@ class FrontendTests(unittest.TestCase):
         self.assertEqual(f.PORTS, dict(at=18445, pl=18446, cz=18447, gbpower=18448))
         for key in ('gb', 'us1', 'kz2'):
             with self.assertRaises(f.c.SafetyError): self.worker.prepare(key, self.inputs())
+        self.assertFalse(self.api.writes)
+
+    def test_actual_nginx443_architecture_accepts_no_xray443_and_preserves_all_five(self):
+        profile = deepcopy(self.api.profiles['entry-profile'])
+        self.assertNotIn(443, {i['port'] for i in profile['config']['inbounds']})
+        self.assertEqual({i['port'] for i in profile['config']['inbounds']}, f.LEGACY_PORTS)
+        self.stage()
+        self.assertEqual(self.api.profiles['entry-profile']['config']['inbounds'][:-1], profile['config']['inbounds'])
+        baseline = self.store.get('operation')['requests']['baseline']['request']['items']
+        self.assertEqual({f.wire_endpoint(i['client'], i['wire'])[1] for i in baseline}, {443, 18444})
+
+    def test_actual_nginx443_requires_runtime_and_every_old_loopback_active_unchanged(self):
+        for change in ('runtime', 'missing', 'public-bind', 'inactive', 'duplicate'):
+            self.init('pl'); request = self.inputs()
+            profile = self.api.profiles['entry-profile']
+            if change == 'runtime': request['runtime'].pop('legacy443listening_nginx_verified')
+            if change == 'missing': profile['config']['inbounds'].pop(1)
+            if change == 'public-bind': profile['config']['inbounds'][1]['listen'] = '0.0.0.0'
+            if change == 'inactive': self.api.nodes[f.p.ENTRY_ID]['configProfile']['activeInbounds'].pop(1)
+            if change == 'duplicate': profile['config']['inbounds'].append(deepcopy(profile['config']['inbounds'][1]))
+            with self.assertRaises(f.c.SafetyError): self.worker.prepare(self.route_id, request)
+            self.assertFalse(self.api.writes)
+        self.init('pl'); self.prepare()
+        self.api.profiles['entry-profile']['config']['inbounds'][1]['port'] = 12444
+        with self.assertRaises(f.c.SafetyError): self.worker.stage(self.route_id)
         self.assertFalse(self.api.writes)
 
     def test_unfinished_other_route_prevents_preparation(self):

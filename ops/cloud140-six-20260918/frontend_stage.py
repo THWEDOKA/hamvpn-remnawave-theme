@@ -14,7 +14,8 @@ stage arms an independent 20-minute rollback before the first panel PATCH.
 The exit must already be finished; this module never rolls it back.
 
 prepare input: {runtime:{id:'entry',node,ip,timestamp,port,port_free:true,
- namespace_verified:true,firewall_ready:true,xray_version}, site:<below>,
+ namespace_verified:true,firewall_ready:true,legacy443listening_nginx_verified:true,
+ xray_version}, site:<below>,
  auto_remark:<actual existing Happ aggregate remark, only when an auto exists>}.
 site attestation: {entry,timestamp,loopback_port:9444,chain_verified:true,
  certificate_valid:true,dns_verified:true,checks:[{sni,tls:'TLSv1.3',alpn:'h2'}],
@@ -24,8 +25,11 @@ site attestation: {entry,timestamp,loopback_port:9444,chain_verified:true,
 accept-site refreshes this independent actual check, never fabricates it.
 
 export-baseline input: {items:[{id,client:'xray'|'mihomo',wire:<exact outbound
- or proxy object>,expected_egress:<observed IP>}]}; cover entry ports443/18444,
-using cached SAME UUID/settings, never a full config with random local ports.
+ or proxy object>,expected_egress:<observed IP>}]}; cover physical entry443
+ via existing nginx SNI router and direct18444. For443 use an actual pre-mutation
+ legacy reference (fresh technical subscription or current old REALITY identity
+ plus authorized technical UUID); for18444 use the actual cached customer proxy.
+ Keep the SAME UUID/settings before/after, never random local listener fields.
 Export results are SECRET and require --secret-stdout. Each request contains
 sha256, request_sha256 and items with a stable wire_sha256. Proofs contain these
 hashes, timestamp, tests:[{id,client,wire_sha256,passed,authenticated,http_code,
@@ -63,6 +67,8 @@ import preflight as p
 import route_model as model
 
 PORTS = {'at': 18445, 'pl': 18446, 'cz': 18447, 'gbpower': 18448}
+LEGACY_LOOPBACK_PORTS = {11443, 12443, 13443, 14443}
+LEGACY_PORTS = LEGACY_LOOPBACK_PORTS | {18444}
 DOMAINS = {model.DOMAINS[key] for key in PORTS}
 STATE = Path('/root/hamvpn-cloud140-six-20260918/frontend')
 TTL = 1200
@@ -122,7 +128,8 @@ def runtime_check(value, route_id, now):
     require(isinstance(value, dict) and value.get('id') == 'entry' and value.get('node') == p.ENTRY_ID
             and value.get('ip') == p.ENTRY and value.get('port') == PORTS[route_id], 'Entry runtime scope mismatch')
     c.fresh(value.get('timestamp'), now)
-    require(all(value.get(flag) is True for flag in ('port_free', 'namespace_verified', 'firewall_ready')), 'Frontend runtime not verified')
+    require(all(value.get(flag) is True for flag in ('port_free', 'namespace_verified', 'firewall_ready',
+            'legacy443listening_nginx_verified')), 'Frontend runtime/nginx443 not verified')
     require(isinstance(value.get('xray_version'), str) and re.fullmatch('[0-9][A-Za-z0-9.+_-]{0,63}', value['xray_version']), 'Installed entry version missing')
 
 
@@ -271,7 +278,15 @@ class Frontend:
         require(node['address'] == p.ENTRY and node['isConnected'] and not node['isDisabled'], 'Entry identity/health mismatch')
         profile = self.api('GET', '/api/config-profiles/' + c.binding(node)['profile'])
         require({n['uuid'] for n in self.api('GET', '/api/nodes/') if c.binding(n)['profile'] == profile['uuid']} == {p.ENTRY_ID}, 'Entry profile must be dedicated')
-        require({443, 18444} <= {i.get('port') for i in profile['config']['inbounds']}, 'Expected legacy entry endpoints missing')
+        # Public443 is an EXISTING nginx SNI router, not an Xray inbound. Its
+        # four active REALITY loopbacks and direct18444 must survive verbatim.
+        legacy = [i for i in profile['config']['inbounds'] if i.get('port') in LEGACY_PORTS]
+        require(len(legacy) == len(LEGACY_PORTS) and {i['port'] for i in legacy} == LEGACY_PORTS,
+                'Expected legacy loopbacks/direct18444 missing or ambiguous')
+        require(all(i.get('listen') == '127.0.0.1' for i in legacy if i['port'] in LEGACY_LOOPBACK_PORTS),
+                'Existing nginx legacy backends must remain loopback-only')
+        active = set(c.binding(node)['inbounds'])
+        require(all(c.metadata(profile).get(i['tag']) in active for i in legacy), 'Legacy entry inbound inactive')
         require(set(c.binding(node)['inbounds']) <= set(c.metadata(profile).values()), 'Entry metadata/binding mismatch')
         host_ids = [selected['host']] + ([p.AUTOS[route_id]] if p.AUTOS[route_id] else [])
         all_hosts = p.indexed(self.api('GET', '/api/hosts/'))
@@ -407,7 +422,7 @@ class Frontend:
         require('apply_intent' not in record, 'Baseline must precede entry mutation')
         self._begin(record, 'baseline')
         items = request.get('items')
-        require(isinstance(items, list) and 2 <= len(items) <= 12, 'Provide bounded actual cached entry cases')
+        require(isinstance(items, list) and 2 <= len(items) <= 12, 'Provide bounded actual pre-mutation legacy reference cases')
         output, ports = [], set()
         for item in items:
             require(set(item) == {'id', 'client', 'wire', 'expected_egress'} and isinstance(item['id'], str)
