@@ -13,11 +13,16 @@ from common import STATE,save
 
 
 def test(item):
+    binary=STATE/'probe-xray'
+    STATE.mkdir(mode=0o700,exist_ok=True)
+    if not binary.exists():
+        subprocess.run(['docker','cp','-L','remnanode:/usr/local/bin/xray',str(binary)],check=True,capture_output=True)
+        binary.chmod(0o700)
     with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
     config={'log':{'loglevel':'debug'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'auth':'noauth','udp':False}}],
         'outbounds':[item['outbound']]}
     with tempfile.TemporaryFile() as log:
-        proc=subprocess.Popen(['docker','exec','-i','remnanode','xray','run','-c','stdin:'],stdin=subprocess.PIPE,stdout=log,stderr=log)
+        proc=subprocess.Popen([str(binary),'run','-c','stdin:'],stdin=subprocess.PIPE,stdout=log,stderr=log)
         try:
             proc.stdin.write(json.dumps(config).encode());proc.stdin.close()
             for _ in range(60):

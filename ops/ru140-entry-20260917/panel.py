@@ -300,7 +300,15 @@ def finish(api):
 def main():
     os.umask(0o077)
     p=argparse.ArgumentParser();p.add_argument('action',choices=['snapshot','backend','stage','create-test','old-probes','new-probes',
-        'publish','verify','rollback','subscription','cleanup','finish','export-candidate','export-node-key','accept-test','export-upstreams','export-clients']);a=p.parse_args()
+        'publish','verify','rollback','subscription','cleanup','finish','export-candidate','export-node-key','accept-test','export-upstreams','export-clients','accept-external-proof']);a=p.parse_args()
+    if a.action=='accept-external-proof':
+        data=json.load(sys.stdin);assert data['all_passed'] and abs(time.time()-data['timestamp'])<600
+        assert {(t['id'],t['fingerprint']) for t in data['tests']}=={(n['id'],fp) for n in NODES for fp in ['chrome','firefox']}
+        assert len(data['tests'])==8
+        for t in data['tests']:
+            n=next(n for n in NODES if n['id']==t['id'])
+            assert t['passed'] and t['http_status']=='204' and t['exit_ip']==n['ip'] and t['curl_codes']==[0,0]
+        save('new-probes',data);print('{"external_probes_accepted":true}');return
     if a.action=='export-candidate':print(json.dumps(read('candidate')));return
     if a.action=='accept-test':
         data=json.load(sys.stdin);assert data['installed_xray_test_passed']
