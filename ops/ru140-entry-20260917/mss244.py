@@ -10,17 +10,11 @@ import time
 ENTRY, INTERFACE, TABLE = '193.233.222.244', 'enp0s3', 'ham_entry244_mss'
 STATE = Path('/root/hamvpn-entry244-20260917/mss244')
 UNIT = Path('/etc/systemd/system/ham-entry244-mss.service')
-RULES = f'''create table ip {TABLE} {{
-    comment "HAMVPN-entry244-MSS1200-v1";
-    chain incoming {{
-        type filter hook input priority -150; policy accept;
-        iifname "{INTERFACE}" ip daddr {ENTRY} tcp dport 443 tcp flags & syn == syn tcp option maxseg size > 1200 tcp option maxseg size set 1200
-    }}
-    chain outgoing {{
-        type filter hook output priority -150; policy accept;
-        oifname "{INTERFACE}" ip saddr {ENTRY} tcp sport 443 tcp flags & syn == syn tcp option maxseg size > 1200 tcp option maxseg size set 1200
-    }}
-}}
+RULES = f'''create table ip {TABLE} {{ comment "HAMVPN-entry244-MSS1200-v2"; }}
+add chain ip {TABLE} incoming {{ type filter hook input priority -150; policy accept; }}
+add chain ip {TABLE} outgoing {{ type filter hook output priority -150; policy accept; }}
+add rule ip {TABLE} incoming iifname "{INTERFACE}" ip daddr {ENTRY} tcp dport 443 tcp flags & syn == syn tcp option maxseg size > 1200 tcp option maxseg size set 1200
+add rule ip {TABLE} outgoing oifname "{INTERFACE}" ip saddr {ENTRY} tcp sport 443 tcp flags & syn == syn tcp option maxseg size > 1200 tcp option maxseg size set 1200
 '''
 DELETE = f'delete table ip {TABLE}\n'
 
@@ -53,6 +47,21 @@ def current():
     tables = json.loads(run('nft', '-j', 'list', 'tables'))['nftables']
     if not any(x.get('table', {}).get('family') == 'ip' and x['table']['name'] == TABLE for x in tables): return None
     return normalized(json.loads(run('nft', '-j', 'list', 'table', 'ip', TABLE)))
+
+
+def complete_table(table):
+    """nft create-table may ignore nested objects: verify actual kernel objects."""
+    entries = table.get('nftables', [])
+    chains = [e['chain'] for e in entries if 'chain' in e]
+    rules = [e['rule'] for e in entries if 'rule' in e]
+    require(len(chains) == 2 and len(rules) == 2, 'MSS chains/rules missing in kernel')
+    for name, hook in [('incoming', 'input'), ('outgoing', 'output')]:
+        matches = [c for c in chains if c['name'] == name]
+        require(len(matches) == 1 and matches[0]['hook'] == hook and matches[0]['prio'] == -150,
+                'MSS hook/priority mismatch')
+        own = [r for r in rules if r['chain'] == name]
+        require(len(own) == 1 and any(e.get('mangle', {}).get('value') == 1200 for e in own[0]['expr']),
+                'MSS assignment missing in kernel')
 
 
 def verified_current():
@@ -102,7 +111,9 @@ def operate(action, check_only=False, persist=False):
         if table is None:
             run('nft', '-f', '-', data=RULES)
             table = current(); require(table is not None, 'Table creation failed')
+            complete_table(table)
             save('owned.json', {'spec': hashlib.sha256(RULES.encode()).hexdigest(), 'table': table})
+        complete_table(table)
         require(verified_current() == table, 'Apply verification failed')
         if persist:
             if not UNIT.exists():

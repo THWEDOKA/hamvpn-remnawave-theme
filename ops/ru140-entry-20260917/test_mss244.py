@@ -9,6 +9,14 @@ from unittest.mock import patch
 import mss244 as m
 
 
+def complete_fixture():
+    entries = [{'table': {'family': 'ip', 'name': m.TABLE}}]
+    for name, hook in [('incoming', 'input'), ('outgoing', 'output')]:
+        entries.append({'chain': {'name': name, 'hook': hook, 'prio': -150}})
+        entries.append({'rule': {'chain': name, 'expr': [{'mangle': {'value': 1200}}]}})
+    return {'nftables': entries}
+
+
 class MSS244Tests(unittest.TestCase):
     def test_scope_both_directions_and_never_increase_mss(self):
         self.assertIn('create table ip ham_entry244_mss', m.RULES)
@@ -65,7 +73,7 @@ class MSS244Tests(unittest.TestCase):
             with self.assertRaises(RuntimeError): m.verified_current()
 
     def test_owned_apply_is_idempotent_and_does_not_restore_global_backup(self):
-        table = {'nftables': []}
+        table = complete_fixture()
         with tempfile.TemporaryDirectory() as temporary, patch.object(m, 'UNIT', Path(temporary) / 'unit'), \
              patch.object(m, 'guard'), patch.object(m, 'verified_current', return_value=table), \
              patch.object(m, 'save') as save, patch.object(m, 'run', return_value='{}') as run, patch.object(m.os, 'umask'):
@@ -75,7 +83,7 @@ class MSS244Tests(unittest.TestCase):
             self.assertEqual(save.call_count, 1)
 
     def test_backup_precedes_apply_and_record_is_saved(self):
-        events = []; table = {'nftables': [{'table': {'name': m.TABLE}}]}
+        events = []; table = complete_fixture()
         def command(*args, data=None):
             events.append(('run', args, data)); return '{}'
         with tempfile.TemporaryDirectory() as temporary, patch.object(m, 'UNIT', Path(temporary) / 'unit'), \
@@ -119,6 +127,20 @@ class MSS244Tests(unittest.TestCase):
             m.UNIT.write_text('foreign')
             with self.assertRaises(RuntimeError): m.operate('apply', persist=True)
             self.assertEqual(m.UNIT.read_text(), 'foreign'); run.assert_not_called()
+
+    def test_complete_table_rejects_empty_table_missing_chain_or_assignment(self):
+        m.complete_table(complete_fixture())
+        broken = [ {'nftables': [{'table': {'name': m.TABLE}}]} ]
+        value = complete_fixture(); value['nftables'].pop(); broken.append(value)
+        value = complete_fixture(); value['nftables'][2]['rule']['expr'] = []; broken.append(value)
+        for value in broken:
+            with self.assertRaises(RuntimeError): m.complete_table(value)
+
+    def test_explicit_chain_and_rule_commands_follow_exclusive_table_creation(self):
+        lines = m.RULES.splitlines()
+        self.assertTrue(lines[0].startswith('create table ip '))
+        self.assertEqual(sum(s.startswith('add chain ip ') for s in lines), 2)
+        self.assertEqual(sum(s.startswith('add rule ip ') for s in lines), 2)
 
 
 if __name__ == '__main__': unittest.main()

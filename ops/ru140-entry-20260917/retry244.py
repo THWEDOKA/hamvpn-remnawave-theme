@@ -6,12 +6,15 @@ import time
 from entry244_common import *
 
 
-def prepare(role):
+def prepare(role, attempt=2):
     import panel244 as p
     import node244 as n
     unit = p.TIMER if role == 'panel' else n.TIMER
     assert all(unit_inactive(unit + suffix) for suffix in ('.timer', '.service'))
-    archive = STATE / 'attempt1-rolled-back'
+    assert attempt in (2, 3)
+    if attempt == 3:
+        assert exists('retry2-prepared')
+    archive = STATE / ('attempt' + str(attempt-1) + '-rolled-back')
     assert not archive.exists(), 'Retry already prepared; inspect current state'
     if role == 'panel':
         assert exists('rollback') and not exists('published') and not exists('publish-intent')
@@ -37,11 +40,12 @@ def prepare(role):
     archive.mkdir(mode=0o700)
     for path in paths:
         path.rename(archive/path.name)
-    save('retry2-prepared', {'timestamp':time.time(),'role':role,'previous_attempt_archived':True})
-    print(json.dumps({'retry2_prepared':role,'previous_failure_evidence_preserved':True}))
+    save('retry'+str(attempt)+'-prepared', {'timestamp':time.time(),'role':role,'previous_attempt_archived':True})
+    print(json.dumps({'retry_prepared':attempt,'role':role,'previous_failure_evidence_preserved':True}))
 
 
 if __name__=='__main__':
     os.umask(0o077)
     parser=argparse.ArgumentParser();parser.add_argument('role',choices=['entry','panel'])
-    prepare(parser.parse_args().role)
+    parser.add_argument('--attempt',type=int,choices=[2,3],default=2)
+    args=parser.parse_args();prepare(args.role,args.attempt)
