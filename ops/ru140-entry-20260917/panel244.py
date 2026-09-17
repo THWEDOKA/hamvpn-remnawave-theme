@@ -120,7 +120,9 @@ def clients(api, old=False):
         else:
             inbound = next(i for i in read('candidate')['inbounds'] if i['tag'] == 'vless-entry244-' + n['id'])
             for fp in ('chrome', 'firefox'):
-                values.append({'id': n['id'] + '-' + fp, 'ip': n['ip'], 'outbound': reality_client(inbound, u, ENTRY, n['domain'], fp)})
+                outbound = reality_client(inbound, u, ENTRY, n['domain'], fp)
+                outbound['settings']['vnext'][0]['port'] = frontend_port(n)
+                values.append({'id': n['id'] + '-' + fp, 'ip': n['ip'], 'outbound': outbound})
     legacy = before['profiles'][OLD_PROFILE]['config']['inbounds'][0]
     for fp, sni in [('chrome', 'google.com'), ('firefox', 'google.com')]:
         values.append({'id': 'legacy-' + fp, 'ip': LEGACY_EGRESS, 'outbound': reality_client(legacy, u, ENTRY, sni, fp)})
@@ -177,15 +179,23 @@ def legacy_host(host):
     return {'inbound': {'configProfileUuid': created['profile'], 'configProfileInboundUuid': created['legacy']}}
 
 
+def frontend_port(node):
+    inbound = next(i for i in read('candidate')['inbounds'] if i['tag'] == 'vless-entry244-' + node['id'])
+    return inbound['port'] if inbound['listen'] == ENTRY else 443
+
+
 def target_host(host):
     n = next(n for n in NODES if host['uuid'] in n['hosts']); created = read('created')
     return {'inbound': {'configProfileUuid': created['profile'], 'configProfileInboundUuid': created['inbounds'][n['id']]},
-            'address': n['domain'], 'sni': n['domain'], 'host': n['domain'], 'port': 443, 'nodes': [NODE],
+            'address': n['domain'], 'sni': n['domain'], 'host': n['domain'], 'port': frontend_port(n), 'nodes': [NODE],
             'securityLayer': 'DEFAULT', 'fingerprint': host.get('fingerprint') or 'chrome', 'alpn': None, 'isDisabled': False}
 
 
 def activate(api):
     assert not exists('activate-intent')
+    if exists('direct-prepared'):
+        assert exists('direct-staged') and read('installed-test')['installed_xray_test_passed']
+        assert read('installed-test')['sha256'] == hashlib.sha256(json.dumps(read('candidate'), sort_keys=True).encode()).hexdigest()
     before = read('before'); created = read('created')
     current = api('GET', '/api/nodes/' + NODE)
     original = next(n for n in before['nodes'] if n['uuid'] == NODE)
@@ -300,7 +310,7 @@ def subscription(api):
             outbound = outputs[0]
             assert outbound['streamSettings']['security'] == 'reality'
             assert outbound['streamSettings']['realitySettings']['serverName'] == n['domain']
-            assert outbound['settings']['vnext'][0]['port'] == 443
+            assert outbound['settings']['vnext'][0]['port'] == frontend_port(n)
             result = {'id': n['id'], 'source': label, **test_one(outbound, n['ip'])}
             tests.append(result); print(json.dumps(result), flush=True)
     banned = {h['remark'] for h in read('before')['hosts'] if h['uuid'] in prior.EXTRA_HOSTS and not h['isHidden']}
