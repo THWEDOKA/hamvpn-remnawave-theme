@@ -119,25 +119,30 @@ def clients(api):
     return result
 
 
-def cleanup(api):
+def cleanup(api, query):
     intent = read('test-intent')
-    user = api('GET', '/api/users/' + intent['uuid'])
-    for key in ('username', 'tag', 'description'):
-        assert user[key] == intent[key], 'Not our disposable account'
-    result = api('DELETE', '/api/users/' + intent['uuid'])
-    assert result.get('isDeleted') is True
-    save('test-cleanup', dict(deleted=True))
+    identifier = str(uuid.UUID(intent['uuid']))
+    sql = "SELECT json_build_object('remaining',count(*)) FROM users WHERE uuid='" + identifier + "'"
+    if query(sql)['remaining']:
+        user = api('GET', '/api/users/' + identifier)
+        for key in ('uuid', 'username', 'tag', 'description'):
+            assert user[key] == intent[key], 'Not our disposable account'
+        if not exists('test-cleanup-intent'):
+            save('test-cleanup-intent', dict(uuid=identifier))
+        api('DELETE', '/api/users/' + identifier)
+    assert query(sql)['remaining'] == 0, 'Disposable account removal not confirmed'
+    save('test-cleanup', dict(deleted=True, absence_verified=True))
     return dict(disposable_user_deleted=True)
 
 
 def main():
     os.umask(0o077)
     p = argparse.ArgumentParser(); p.add_argument('action', choices=['snapshot', 'account', 'export-clients', 'cleanup'])
-    args = p.parse_args(); api, _ = create_client()
+    args = p.parse_args(); api, query = create_client()
     if args.action == 'snapshot': result = snapshot(api)
     elif args.action == 'account': account(api); result = dict(disposable_probe_ready=True)
     elif args.action == 'export-clients': result = clients(api)
-    else: result = cleanup(api)
+    else: result = cleanup(api, query)
     print(json.dumps(result))
 
 

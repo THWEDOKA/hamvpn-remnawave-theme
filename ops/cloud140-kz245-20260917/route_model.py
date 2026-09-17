@@ -217,31 +217,41 @@ def _service_uuid(value):
     return value
 
 
-def build_entry_config(source_config, identities, service_uuids, *, include_cached_snis=False):
-    """Append two fresh frontends, two SSH-loopback outbounds and scoped routes.
+def build_entry_config(source_config, identities, service_uuids, *, include_cached_snis=False, route_ids=None):
+    """Append selected fresh frontends, SSH-loopback outbounds and scoped routes.
 
 identities = {route_id: {'privateKey': <new X25519 key>, 'shortIds': [<hex>]}}
 service_uuids = {route_id: <separate backend service user's UUID>}
-Both mappings must cover exactly the canonical exits. No source exit key is
+route_ids defaults to both exits; a nonempty unique list can select one exit.
+Both mappings must cover exactly the selection, without placeholders for other
+routes. Existing/default behavior is unchanged. No source exit key is
 copied. Optional cached SNIs are only extra names, NOT migration of cached
 identities: old direct endpoints must remain available. A TLS probe for every
 extra SNI is required before opting in; the model cannot certify its target.
 """
     _require(type(include_cached_snis) is bool, 'Cached SNI option must be boolean')
-    ids = set(REVERSE_PORTS)
-    _require({node['id'] for node in NODES} == ids, 'Canonical route inventory changed')
+    known = set(REVERSE_PORTS)
+    _require({node['id'] for node in NODES} == known, 'Canonical route inventory changed')
+    if route_ids is None:
+        route_ids = list(REVERSE_PORTS)
+    _require(isinstance(route_ids, list) and bool(route_ids)
+             and all(isinstance(key, str) and key in known for key in route_ids), 'Invalid route selection')
+    ids = set(route_ids)
+    _require(len(ids) == len(route_ids), 'Duplicate route selection')
     _require(isinstance(identities, dict) and set(identities) == ids,
              'Provide an explicit identity for each route')
     _require(isinstance(service_uuids, dict) and set(service_uuids) == ids,
              'Provide an explicit backend service UUID for each route')
-    checked = {key: _identity(identities[key]) for key in REVERSE_PORTS}
-    services = {key: _service_uuid(service_uuids[key]) for key in REVERSE_PORTS}
+    checked = {key: _identity(identities[key]) for key in route_ids}
+    services = {key: _service_uuid(service_uuids[key]) for key in route_ids}
     _require(len({item['privateKey'] for item in checked.values()}) == len(ids),
              'Frontend identities must be independent')
     config = _clone(source_config)
     rules = []
     for node in NODES:
         key = node['id']
+        if key not in ids:
+            continue
         tags = route_tags(key)
         _assert_new_tags(config, {tags['front'], tags['exit']})
         _assert_free_port(config, node['port'])
