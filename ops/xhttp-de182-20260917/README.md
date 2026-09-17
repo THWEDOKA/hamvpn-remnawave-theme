@@ -31,5 +31,16 @@ External success is not proof of reachability from Russian operators. The owner
 must refresh the subscription and explicitly select the new XHTTP TLS test host.
 Do not claim a TSPU/allowlist bypass before that test succeeds.
 
+## Additional owner request: three Timeweb auto candidates
+
+`auto_timeweb.py prepare/apply/verify/finish` adds only the three explicitly
+named existing Timeweb nodes as hidden AUTO_BASE_POOL hosts. All use the existing
+shared REALITY inbound. It does not modify that profile, node bindings, visible
+hosts, squad entitlements or the shared auto template. Before addition each node
+must pass an authenticated probe; afterwards its exact public auto-subscription
+outbound must be present once and pass again. A 15-minute rollback disables only
+the three newly owned entries. It uses the same disposable pilot test account;
+finish these checks before `panel.py cleanup`.
+
 References: [XHTTP upstream](https://github.com/XTLS/Xray-core/discussions/4113),
 [Xray transport](https://xtls.github.io/en/config/transport.html).

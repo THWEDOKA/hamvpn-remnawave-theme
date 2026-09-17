@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import unittest
 import common
+import auto_timeweb
 
 
 class Pilot(unittest.TestCase):
@@ -54,6 +55,17 @@ class Pilot(unittest.TestCase):
 
     def test_python_compiles(self):
         for file in common.ROOT.glob('*.py'): compile(file.read_text(encoding='utf-8'), str(file), 'exec')
+
+    def test_only_requested_timeweb_targets(self):
+        self.assertEqual({t['name'] for t in auto_timeweb.TARGETS},
+            {'Netherlands-HAM-TMWEB-1', 'HAM-GERMANY-TMWEB-1', 'HAM-NL-TMWEB-2'})
+        self.assertNotIn(common.NODE, [t['node'] for t in auto_timeweb.TARGETS])
+        for target in auto_timeweb.TARGETS:
+            host = auto_timeweb.body(target)
+            self.assertTrue(host['isDisabled'] and host['isHidden'])
+            self.assertEqual(host['tags'], ['AUTO_BASE_POOL'])
+            self.assertEqual(host['nodes'], [target['node']])
+            self.assertEqual(host['address'], target['ip'])
 
 
 if __name__ == '__main__': unittest.main()
