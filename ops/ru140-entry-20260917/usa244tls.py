@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import usa244site as s
 import usa244reverse as r
 
@@ -52,6 +53,33 @@ def authorize_proxy():
     return {'only_existing_restricted_key_accepts_local_tls_proxy':True}
 
 
+def xray():
+    s.guard();s.certificate_details()
+    assert CONF.is_file() and CONF.read_text()==s.read('transport-tls-intent')['text']
+    unit=Path('/etc/systemd/system/ham-usa244-tls.service')
+    assert not unit.exists()
+    config={'log':{'loglevel':'warning'},'inbounds':[{'tag':'usa-only-tls-ssh','listen':s.ENTRY,'port':PORT,
+        'protocol':'dokodemo-door','settings':{'address':s.ENTRY,'port':r.SSH_PORT,'network':'tcp'},
+        'streamSettings':{'network':'raw','security':'tls','sockopt':{'tcpMaxSeg':1200},
+            'tlsSettings':{'alpn':['http/1.1'],'certificates':[{'certificateFile':'/etc/letsencrypt/live/'+s.DOMAIN+'/fullchain.pem',
+                'keyFile':'/etc/letsencrypt/live/'+s.DOMAIN+'/privkey.pem'}]}}}],
+        'outbounds':[{'tag':'BLOCK','protocol':'blackhole'},{'tag':'SSH','protocol':'freedom'}],
+        'routing':{'rules':[{'type':'field','source':[r.SOURCE+'/32'],'inboundTag':['usa-only-tls-ssh'],'outboundTag':'SSH'}]}}
+    s.save('xray-tls-config',config);binary='/root/hamvpn-entry244-20260917/probe-xray'
+    path=s.STATE/'xray-tls-config.json'
+    s.run(binary,'run','-test','-c',str(path))
+    before=s.baseline()
+    CONF.rename(s.STATE/'superseded-nginx-transport.conf');s.run('nginx','-t');s.run('systemctl','reload','nginx')
+    text=('[Unit]\nDescription=USA-only TLS protected SSH relay\nAfter=network-online.target ham-usa244-listener.service\n'
+        '[Service]\nType=simple\nExecStart='+binary+' run -c '+str(path)+'\nRestart=always\nRestartSec=3\n'
+        'NoNewPrivileges=true\nProtectSystem=strict\nProtectHome=read-only\nPrivateTmp=true\nCapabilityBoundingSet=\n'
+        '[Install]\nWantedBy=multi-user.target\n')
+    with unit.open('x') as handle:os.chmod(unit,0o644);handle.write(text)
+    s.save('xray-tls-unit',{'text':text,'binary_sha256':hashlib.sha256(Path(binary).read_bytes()).hexdigest()})
+    s.run('systemd-analyze','verify',str(unit));s.run('systemctl','daemon-reload');s.run('systemctl','enable','--now',unit.name)
+    return {'xray_tls_transport':True,'port':PORT,'only_source':r.SOURCE}
+
+
 if __name__=='__main__':
-    os.umask(0o077);p=argparse.ArgumentParser();p.add_argument('action',choices=['install','authorize-proxy'])
+    os.umask(0o077);p=argparse.ArgumentParser();p.add_argument('action',choices=['install','authorize-proxy','xray'])
     print(json.dumps(globals()[p.parse_args().action.replace('-','_')]()))
