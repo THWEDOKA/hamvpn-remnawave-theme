@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 import preflight as p
 import frontend_stage as f
 import operator_session as o
@@ -34,6 +35,16 @@ def measure(request):
     proof=json.loads(result.stdout)
     print(json.dumps(proof),flush=True)
     return proof
+
+
+def accept_measured(root, route_id, phase, proof):
+    # Windows' clock currently leads panel time. Do not rewrite timestamps or
+    # relax the no-future-proof guard: wait, bounded, until the panel catches up.
+    remote_now=float(o.transport.remote('panel',"python3 -c 'import time; print(time.time())'"))
+    ahead=proof['timestamp']-remote_now
+    p.require(ahead<=45,'Control/panel clock difference exceeds safe bound')
+    if ahead>0:time.sleep(ahead+1)
+    return o.transport.remote('panel',command(root,'accept-'+phase,route_id),p.encoded(proof))
 
 
 def prepare(root, route_id):
@@ -94,7 +105,7 @@ print(json.dumps(wire))
     cases=dict(items=[dict(id='legacy-443-reference',client='xray',wire=old,expected_egress='217.60.68.182'),
                      dict(id='legacy-18444-cached',client='mihomo',wire=json.loads(cached.stdout),expected_egress='196.251.107.245')])
     request=json.loads(o.transport.remote('panel',command(root,'export-baseline',route_id,True),p.encoded(cases)))
-    return o.transport.remote('panel',command(root,'accept-baseline',route_id),p.encoded(measure(request)))
+    return accept_measured(root,route_id,'baseline',measure(request))
 
 
 def traffic(root, route_id, phase):
@@ -105,7 +116,7 @@ def traffic(root, route_id, phase):
         p.require(headers.returncode==0,'Existing device headers unavailable')
         data=headers.stdout
     request=json.loads(o.transport.remote('panel',command(root,'export-'+phase,route_id,True),data))
-    return o.transport.remote('panel',command(root,'accept-'+phase,route_id),p.encoded(measure(request)))
+    return accept_measured(root,route_id,phase,measure(request))
 
 
 def main():
