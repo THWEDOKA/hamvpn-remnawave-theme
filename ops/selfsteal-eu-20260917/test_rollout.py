@@ -23,7 +23,10 @@ class Templates(unittest.TestCase):
                 self.assertIn('/etc/letsencrypt/live/' + n['domain'], tls)
                 self.assertIn('TLSv1.3', tls)
                 self.assertIn('nginx -t', (directory / 'renew-nginx.sh').read_text())
-                self.assertIn('viewport', (directory / 'site/index.html').read_text())
+                html = (directory / 'site/index.html').read_text(encoding='utf-8')
+                self.assertIn('viewport', html)
+                self.assertIn('Ремонт чайников', html)
+                self.assertNotIn('\ufffd', html)
 
     def test_python_compiles(self):
         for file in ROOT.glob('*.py'): compile(file.read_text(encoding='utf-8'), str(file), 'exec')
