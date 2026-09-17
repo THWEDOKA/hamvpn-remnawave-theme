@@ -90,8 +90,10 @@ def install(identifier):
         with os.fdopen(fd,'w') as f:f.write(before['unit']);f.flush();os.fsync(f.fileno())
         call(['systemctl','daemon-reload'])
     result=ensure(identifier)
-    call(['systemctl','enable','--now',UNIT.name])
-    call(['systemctl','is-enabled',UNIT.name]);call(['systemctl','is-active',UNIT.name])
+    # The service runs ensure under this same lock. Start only after main
+    # releases it; otherwise enable --now deadlocks on our own flock.
+    call(['systemctl','enable',UNIT.name])
+    call(['systemctl','is-enabled',UNIT.name])
     if not s.exists('installed'):s.put('installed',result)
     return result
 
@@ -133,7 +135,12 @@ def main():
     s=store(args.id);s.secure()
     fd=os.open(s.path/'operation.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
     with os.fdopen(fd,'rb') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX);print(json.dumps(globals()[args.action.replace('-','_')](args.id)))
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        result=globals()[args.action.replace('-','_')](args.id)
+    if args.action=='install':
+        call(['systemctl','start',UNIT.name])
+        call(['systemctl','is-active',UNIT.name])
+    print(json.dumps(result))
 
 if __name__=='__main__':
     try:main()

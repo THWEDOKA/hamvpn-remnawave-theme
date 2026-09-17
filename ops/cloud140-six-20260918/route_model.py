@@ -381,7 +381,7 @@ outbound is a deep copy of the supplied object with ONLY its tag replaced.
     _assert_free_port(config, port)
     checked = _fresh_identity(config, identity)
     outbound = _backend_outbound(backend_outbound, exit_id, config)
-    reality = dict(show=False, xver=0, target=TLS_TARGET, serverNames=[domain], **checked)
+    reality = dict(show=False, xver=0, target=TLS_TARGET, serverNames=[domain], minClientVer='1.8.2', **checked)
     config['inbounds'].append(dict(
         tag=tags['front'], listen=ENTRY, port=port, protocol='vless',
         settings=dict(clients=[], decryption='none'),

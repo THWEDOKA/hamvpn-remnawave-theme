@@ -104,7 +104,8 @@ def one_probe(item, binary):
         sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
     config = dict(log=dict(loglevel='none'), inbounds=[dict(listen='127.0.0.1', port=port,
                   protocol='socks', settings=dict(auth='noauth', udp=False))], outbounds=[item['outbound']])
-    result = dict(id=item['id'], started_at=time.time())
+    result = dict(id=item['id'], started_at=time.time(),
+                  wire_sha256=p.digest({k:v for k,v in item['outbound'].items() if k!='tag'}))
     process = subprocess.Popen([str(binary), 'run', '-c', 'stdin:'], stdin=subprocess.PIPE,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
