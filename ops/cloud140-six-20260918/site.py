@@ -1,4 +1,8 @@
-"""Six-name, isolated self-steal website preparation. No VPN routing changes.
+"""Four-name, isolated self-steal website preparation. No VPN routing changes.
+
+Scope reduced before deployment to AT, PL, CZ and GBpower. GB216 and US1 are
+withdrawn: never create DNS or request certificates for their former names.
+Historical cloud140-six paths/ownership prefix stay stable for the coordinator.
 
 Deploy this directory AND ../cloud140-kz245-20260917/site.py from the same
 verified Git release. Shared implementation is hash-pinned (LF-normalized).
@@ -16,6 +20,7 @@ This wrapper never imports inventory.py or the old entry's VPN coordinator.
 Import and --help are offline; DNS and production actions require explicit CLI.
 """
 import hashlib
+from http.client import HTTPResponse
 import importlib.util
 from pathlib import Path
 
@@ -40,7 +45,7 @@ s.__doc__ = __doc__
 s.ROOT = ROOT
 s.ENTRY = '176.108.245.140'
 s.DOMAINS = ('in-at38.torcalc.ru', 'in-pl141.torcalc.ru', 'in-cz85.torcalc.ru',
-             'in-gb216.torcalc.ru', 'in-us1.torcalc.ru', 'in-gb225.torcalc.ru')
+             'in-gb225.torcalc.ru')
 s.DOMAIN, s.PORT = s.DOMAINS[0], 9444
 s.STATE = Path('/root/hamvpn-cloud140-six-20260918/site')
 s.NGINX = Path('/etc/nginx')
@@ -61,6 +66,7 @@ s.MAX_AGE = 1800
 
 _base_config, _base_baseline = s.site_config, s.baseline
 _base_dns, _base_verify, _base_tls = s.dns, s.verify, s.tls
+_base_local_tls = s.local_tls
 
 
 def site_config(tls=False):
@@ -77,9 +83,48 @@ def baseline():
     return result
 
 
+def https_site(domain):
+    """Check the actual HTTPS page, not just a successful TLS handshake.
+
+    Connect only to this operation's loopback port; SNI, certificate/hostname
+    validation and Host all use the approved name. Never follow redirects.
+    The intended public asset hash bounds and validates the response body.
+    """
+    s.require(domain in s.DOMAINS, 'Out-of-scope HTTPS name')
+    expected = (s.WEB / 'index.html').read_bytes()
+    s.require(0 < len(expected) <= 65536 and
+              s.digest(expected) == s.read('http-intent')['assets']['index.html'],
+              'Expected public page changed or is oversized')
+    context = s.ssl.create_default_context()
+    context.minimum_version = s.ssl.TLSVersion.TLSv1_3
+    context.set_alpn_protocols(['http/1.1'])
+    with s.socket.create_connection(('127.0.0.1', s.PORT), timeout=8) as raw:
+        with context.wrap_socket(raw, server_hostname=domain) as secure:
+            s.require(secure.version() == 'TLSv1.3' and
+                      secure.selected_alpn_protocol() == 'http/1.1', 'HTTPS negotiation failed')
+            secure.sendall(('GET / HTTP/1.1\r\nHost: ' + domain +
+                            '\r\nConnection: close\r\n\r\n').encode('ascii'))
+            response = HTTPResponse(secure)
+            try:
+                response.begin()
+                body = response.read(len(expected) + 1)
+                s.require(response.status == 200 and body == expected, 'HTTPS page mismatch')
+            finally:
+                response.close()
+    return {'sni': domain, 'status': 200, 'sha256': s.digest(expected)}
+
+
+def local_tls():
+    result = _base_local_tls()
+    # All four h2 handshakes must succeed before checking the HTTP/1.1 bodies.
+    result['https_sites'] = [https_site(domain) for domain in s.DOMAINS]
+    return result
+
+
 def dns():
-    # Seed a six-operation intent instead of inheriting the old hardcoded DNS
-    # comment prefix. All uncertain-POST/readback/rollback logic stays shared.
+    # Seed the exact four-name intent with our historical ownership prefix.
+    # Old six-name intents fail below before any provider request or mutation.
+    # All uncertain-POST/readback/rollback logic stays shared.
     s.guard(False)
     if not s.exists('dns-intent'):
         request = s.client()
@@ -118,6 +163,7 @@ def tls():
 # Functions defined in the shared module resolve globals in its own isolated
 # namespace. No sys.modules replacement or mutation of the original helper.
 s.site_config, s.baseline, s.dns, s.verify, s.tls = site_config, baseline, dns, verify, tls
+s.local_tls = local_tls
 
 
 def main():

@@ -1,4 +1,4 @@
-"""Offline six-name scope contracts plus shared safety/lifecycle regressions."""
+"""Offline four-name scope contracts plus shared safety/lifecycle regressions."""
 import copy
 import hashlib
 import importlib.util
@@ -24,7 +24,7 @@ shared_tests.s = s
 
 
 class SharedSafetyTests(unittest.TestCase):
-    """Run domain-count-independent old lifecycle tests against the SIX engine."""
+    """Run domain-count-independent old lifecycle tests against the scoped engine."""
 
 
 EXCLUDED = {
@@ -46,12 +46,12 @@ for cls in (shared_tests.DNSTests, shared_tests.HTTPAndProofTests,
 del cls, name, method
 
 
-class SixScopeTests(unittest.TestCase):
+class FourScopeTests(unittest.TestCase):
     provider = shared_tests.DNSTests.provider
 
     def test_exact_scope_and_no_original_module_mutation(self):
         self.assertEqual(s.DOMAINS, ('in-at38.torcalc.ru', 'in-pl141.torcalc.ru', 'in-cz85.torcalc.ru',
-                                   'in-gb216.torcalc.ru', 'in-us1.torcalc.ru', 'in-gb225.torcalc.ru'))
+                                   'in-gb225.torcalc.ru'))
         self.assertEqual(original.DOMAINS, ('in-kz2.torcalc.ru', 'in-de245.torcalc.ru'))
         self.assertEqual(original.PORT, 9443)
         self.assertEqual(s.PORT, 9444)
@@ -72,7 +72,8 @@ class SixScopeTests(unittest.TestCase):
         self.assertEqual(re.findall(r'listen ([^;]+);', config), ['80', '127.0.0.1:9444 ssl http2'])
         for domain in s.DOMAINS:
             self.assertEqual(config.count(domain), 4 if domain == s.DOMAIN else 2)
-        for foreign in ('in-kz2', 'in-de245', 'ham-cloud140-kz245', 'HAMCloud140KZ245', ':443', ':8443', ':9443'):
+        for foreign in ('in-kz2', 'in-de245', 'in-gb216', 'in-us1', 'ham-cloud140-kz245',
+                        'HAMCloud140KZ245', ':443', ':8443', ':9443'):
             self.assertNotIn(foreign, config)
         self.assertIn('shared:HAMCloud140Six:10m', config)
         self.assertIn('/etc/letsencrypt/live/in-at38.torcalc.ru/privkey.pem', config)
@@ -86,20 +87,21 @@ class SixScopeTests(unittest.TestCase):
         self.assertIn('/usr/sbin/nginx -t', s.HOOK_TEXT)
         self.assertIn('/usr/bin/systemctl reload nginx', s.HOOK_TEXT)
 
-    def test_all_six_dns_exact_idempotent_owned(self):
+    def test_all_four_dns_exact_idempotent_owned(self):
         with shared_tests.memory() as values:
             request, rows, calls = self.provider(values)
             with patch.object(s, 'client', return_value=request):
                 s.dns()
                 s.dns()
-                self.assertEqual(sum(c[0] == 'POST' for c in calls), 6)
+                self.assertEqual(sum(c[0] == 'POST' for c in calls), 4)
+                self.assertEqual({c[2]['name'] for c in calls if c[0] == 'POST'}, set(s.DOMAINS))
                 self.assertTrue(all(re.fullmatch('ham-cloud140-six-[a-f0-9]{32}', r[0]['comment']) for r in rows.values()))
                 self.assertTrue(all(r[0]['content'] == s.ENTRY and r[0]['proxied'] is False for r in rows.values()))
                 s.dns_rollback()
-            self.assertEqual([c[1] for c in calls if c[0] == 'DELETE'], ['/fixture-' + str(i) for i in range(6)])
+            self.assertEqual([c[1] for c in calls if c[0] == 'DELETE'], ['/fixture-' + str(i) for i in range(4)])
             self.assertFalse(any(rows.values()))
 
-    def test_conflict_in_sixth_name_stops_before_intent_or_writes(self):
+    def test_conflict_in_fourth_name_stops_before_intent_or_writes(self):
         for kind in ('A', 'AAAA', 'CNAME', 'TXT'):
             with self.subTest(kind=kind), shared_tests.memory() as values:
                 initial = {d: [] for d in s.DOMAINS}
@@ -110,7 +112,7 @@ class SixScopeTests(unittest.TestCase):
                 self.assertNotIn('dns-intent', values)
                 self.assertTrue(all(c[0] == 'GET' for c in calls))
 
-    def test_lost_response_reconciles_then_creates_only_remaining_five(self):
+    def test_lost_response_reconciles_then_creates_only_remaining_three(self):
         with shared_tests.memory() as values:
             request, rows, calls = self.provider(values)
             def uncertain(method, suffix='', body=None):
@@ -122,8 +124,35 @@ class SixScopeTests(unittest.TestCase):
                 s.dns()
             with patch.object(s, 'client', return_value=request):
                 s.dns()
-            self.assertEqual(sum(c[0] == 'POST' for c in calls), 6)
-            self.assertTrue(all('dns-owned-' + str(i) in values for i in range(6)))
+            self.assertEqual(sum(c[0] == 'POST' for c in calls), 4)
+            self.assertTrue(all('dns-owned-' + str(i) in values for i in range(4)))
+
+    def test_old_six_name_intent_rejected_before_any_dns_request(self):
+        names = (*s.DOMAINS, 'in-gb216.torcalc.ru', 'in-us1.torcalc.ru')
+        intent = {'before': {d: [] for d in names}, 'wanted': {d: {} for d in names}}
+        with shared_tests.memory({'dns-intent': intent}), patch.object(s, 'client') as client, self.assertRaises(RuntimeError):
+            s.dns()
+        client.assert_not_called()
+
+    def test_old_six_name_certificate_intent_never_reissues_acme(self):
+        with shared_tests.fake_site() as (values, commands, link):
+            s.http()
+            values['cert-intent'] = {'domains': [*s.DOMAINS, 'in-gb216.torcalc.ru', 'in-us1.torcalc.ru']}
+            commands.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, 'Certificate intent differs'):
+                s.certificate()
+            commands.assert_not_called()
+
+    def test_withdrawn_names_rejected_by_dns_and_https_before_network(self):
+        for domain in ('in-gb216.torcalc.ru', 'in-us1.torcalc.ru'):
+            with self.subTest(domain=domain):
+                request = MagicMock()
+                with self.assertRaises(RuntimeError):
+                    s.dns_rows(request, domain)
+                request.assert_not_called()
+                with patch.object(s.socket, 'create_connection') as connect, self.assertRaises(RuntimeError):
+                    wrapper.https_site(domain)
+                connect.assert_not_called()
 
     def test_foreign_scope_intent_stops_without_provider_mutation(self):
         with shared_tests.memory() as values:
@@ -136,39 +165,92 @@ class SixScopeTests(unittest.TestCase):
                     s.dns()
                 self.assertFalse(calls)
 
-    def test_both_resolvers_verify_all_six_a_and_aaaa(self):
+    def test_both_resolvers_verify_all_four_a_and_aaaa(self):
         def answer(*args, **kwargs):
             domain, kind = args[2:4]
             return ';; status: NOERROR,\n' + (domain + '. 300 IN A ' + s.ENTRY + '\n' if kind == 'A' else '')
         with patch.object(s, 'run', side_effect=answer) as run:
             s.converged()
-        self.assertEqual(run.call_count, 24)
+        self.assertEqual(run.call_count, 16)
         self.assertEqual({c.args[2] for c in run.call_args_list}, set(s.DOMAINS))
 
-    def test_external_probe_each_name_and_missing_sixth_rejected(self):
+    def test_external_probe_each_name_and_missing_fourth_rejected(self):
         ready, proof = shared_tests.ready_and_proof()
         with patch.object(s.subprocess, 'run', return_value=MagicMock(stdout='different host')), \
              patch.object(s, 'converged'), patch.object(s, 'http_get', return_value=(ready['token'] + '\n').encode()) as get:
             result = s.external_proof(ready)
-        self.assertEqual([c.args[2] for c in get.call_args_list], [s.ENTRY] * 6)
+        self.assertEqual([c.args[2] for c in get.call_args_list], [s.ENTRY] * 4)
         self.assertEqual({c['domain'] for c in result['checks']}, set(s.DOMAINS))
         proof['checks'].pop()
         with shared_tests.memory({'http-ready': ready}), patch.object(s.time, 'time', return_value=120), self.assertRaises(RuntimeError):
             s.check_external(proof)
 
-    def test_tls_all_six_verified_names_and_no_public_listener(self):
+    def test_tls_all_four_verified_names_and_no_public_listener(self):
         context = MagicMock()
         secure = context.wrap_socket.return_value.__enter__.return_value
         secure.version.return_value = 'TLSv1.3'
         secure.selected_alpn_protocol.return_value = 'h2'
         with patch.object(s, 'listeners', return_value=['127.0.0.1:9444']), \
-             patch.object(s.ssl, 'create_default_context', return_value=context), patch.object(s.socket, 'create_connection'):
+             patch.object(s.ssl, 'create_default_context', return_value=context), patch.object(s.socket, 'create_connection'), \
+             patch.object(wrapper, 'https_site', side_effect=lambda d: {'sni': d, 'status': 200}) as https:
             result = s.local_tls()
+        self.assertEqual(https.call_count, 4)
+        self.assertEqual({c['sni'] for c in result['https_sites']}, set(s.DOMAINS))
         self.assertEqual({c['sni'] for c in result['checks']}, set(s.DOMAINS))
         self.assertEqual(context.minimum_version, s.ssl.TLSVersion.TLSv1_3)
         for listeners in ([], ['0.0.0.0:9444'], ['127.0.0.1:9444', '[::]:9444'], ['127.0.0.1:9443']):
             with patch.object(s, 'listeners', return_value=listeners), self.assertRaises(RuntimeError):
                 s.local_tls()
+
+    def test_https_page_uses_exact_sni_host_loopback_and_intended_asset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            web = Path(temporary)
+            body = b'fixture public website'
+            (web / 'index.html').write_bytes(body)
+            context = MagicMock()
+            secure = context.wrap_socket.return_value.__enter__.return_value
+            secure.version.return_value = 'TLSv1.3'
+            secure.selected_alpn_protocol.return_value = 'http/1.1'
+            response = MagicMock(status=200)
+            response.read.return_value = body
+            with shared_tests.memory({'http-intent': {'assets': {'index.html': s.digest(body)}}}), \
+                 patch.object(s, 'WEB', web), patch.object(s.ssl, 'create_default_context', return_value=context), \
+                 patch.object(s.socket, 'create_connection') as connect, \
+                 patch.object(wrapper, 'HTTPResponse', return_value=response):
+                result = wrapper.https_site(s.DOMAINS[-1])
+            connect.assert_called_once_with(('127.0.0.1', 9444), timeout=8)
+            self.assertEqual(context.wrap_socket.call_args.kwargs['server_hostname'], s.DOMAINS[-1])
+            self.assertIn(('Host: ' + s.DOMAINS[-1] + '\r\n').encode(), secure.sendall.call_args.args[0])
+            response.read.assert_called_once_with(len(body) + 1)
+            response.close.assert_called_once()
+            self.assertEqual(result, {'sni': s.DOMAINS[-1], 'status': 200, 'sha256': s.digest(body)})
+
+    def test_https_page_rejects_redirect_wrong_body_or_changed_asset(self):
+        for kind in ('redirect', 'wrong_body', 'changed_asset', 'wrong_alpn'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                web = Path(temporary)
+                body = b'fixture public website'
+                (web / 'index.html').write_bytes(body)
+                context = MagicMock()
+                secure = context.wrap_socket.return_value.__enter__.return_value
+                secure.version.return_value = 'TLSv1.3'
+                secure.selected_alpn_protocol.return_value = 'h2' if kind == 'wrong_alpn' else 'http/1.1'
+                response = MagicMock(status=301 if kind == 'redirect' else 200)
+                response.read.return_value = b'foreign website' if kind == 'wrong_body' else body
+                checksum = '0' * 64 if kind == 'changed_asset' else s.digest(body)
+                with shared_tests.memory({'http-intent': {'assets': {'index.html': checksum}}}), \
+                     patch.object(s, 'WEB', web), patch.object(s.ssl, 'create_default_context', return_value=context), \
+                     patch.object(s.socket, 'create_connection') as connect, \
+                     patch.object(wrapper, 'HTTPResponse', return_value=response), self.assertRaises(RuntimeError):
+                    wrapper.https_site(s.DOMAIN)
+                if kind == 'changed_asset':
+                    connect.assert_not_called()
+
+    def test_https_rejects_foreign_name_before_file_or_network_access(self):
+        with patch.object(s, 'WEB') as web, patch.object(s.socket, 'create_connection') as connect, self.assertRaises(RuntimeError):
+            wrapper.https_site('foreign.invalid')
+        web.__truediv__.assert_not_called()
+        connect.assert_not_called()
 
     def test_baseline_includes_9443_and_other_nginx_files(self):
         with tempfile.TemporaryDirectory() as temporary:

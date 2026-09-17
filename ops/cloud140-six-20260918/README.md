@@ -144,3 +144,91 @@ TLS, ни его ошибка не заменяют аутентифициров
 обнаружение несовпадения binding, запрет посторонних IP/невалидных портов,
 разделение UDP endpoint и TCP website observation. `git diff --check` чистый.
 Публикация этих двух файлов — только главным исполнителем после ревью.
+
+## Self-steal sidecar: проверка готовности 2026-09-17 23:14 UTC
+
+**Изменение области до развёртывания:** пользователь исключил GB216 и US1.
+Активная подготовка self-steal теперь только для **четырёх** имён:
+`in-at38.torcalc.ru`, `in-pl141.torcalc.ru`, `in-cz85.torcalc.ru`,
+`in-gb225.torcalc.ru`. `in-gb216.torcalc.ru` и `in-us1.torcalc.ru` не создавать
+в DNS и не включать в ACME/SAN. Удаление нод/хостов выполняет отдельно
+координатор. Исторический путь `cloud140-six` сохранён для совместимости
+операторских команд; он не означает разрешение на шесть доменов.
+
+Это отдельная read-only проверка сайта и DNS, **не публикация шести маршрутов**.
+Состояние сверено заново по SSH с закреплёнными ключами; root-доступ на входе
+получен через `gasan` и `sudo -n`. Старые сетевые наблюдения выше этой проверкой
+не обновлялись.
+
+- На CLOUDru `176.108.245.140` nginx активен, `nginx -t` успешен;
+  Remnanode работает в host network. Существующие TCP listeners:
+  `0.0.0.0:80`, `0.0.0.0:443`, `127.0.0.1:8443`, `127.0.0.1:9443`.
+  Новый локальный `9444` свободен.
+- Для всех шести согласованных FQDN точные записи Cloudflare отсутствуют.
+  Два резолвера (`1.1.1.1`, `8.8.8.8`) вернули NXDOMAIN для A/AAAA/CNAME.
+  Чтение зоны `torcalc.ru` и DNS через существующий закрытый credential панели
+  успешно. **Права DNS Edit не проверялись пробной записью.**
+- Собственные vhost, webroot, state, сертификат и reload-hook шести имён ещё
+  отсутствуют; этих имён нет и в effective nginx configuration. Частичного
+  развёртывания или ожидающего ACME-intent не обнаружено.
+- Установлен Certbot `2.9.0`; parse-only проверка нужных флагов успешна.
+  Есть ровно один существующий production ACME account; `certbot.timer`
+  enabled/active. Это готовность, а не успешный dry-run будущего сертификата.
+- Старый сертификат `in-kz2.torcalc.ru` / `in-de245.torcalc.ru` действует до
+  **2026-12-16 19:40:45 UTC**. На обоих SNI `127.0.0.1:9443` проверены
+  доверенная цепочка и имя, TLS 1.3, ALPN h2, HTTP 200 и точное содержимое
+  существующей страницы. Этот listener, vhost и lineage не изменялись.
+
+`site.py` сохраняет hash-pin общего движка. Дополнительная scoped проверка
+теперь проверяет не только четыре TLS/h2 handshake, но и HTTPS HTTP/1.1 body
+через тот же loopback target: правильный SNI/Host, доверенная цепочка,
+HTTP 200, точное соответствие исходному публичному asset hash, без redirect.
+Проверки не выводят ключи, токены или конфиги. Assets не изменены.
+Проверки включают чужой DNS, потерянный POST/ACME, сохранение 9443,
+ошибочный HTTPS body, scoped rollback и отказ при старом six-name intent
+до любых DNS-запросов. Исходный read-only аудит выше относится к прежнему
+списку шести имён и не разрешает их последующее создание.
+
+### Порядок действий главного исполнителя после публикации
+
+Эти команды **не выполнялись sidecar-исполнителем**. Только координатор после
+проверенного push развёртывает один и тот же Git archive на panel и entry:
+`ops/cloud140-six-20260918/` вместе с pinned
+`ops/cloud140-kz245-20260917/site.py`. Не копировать только wrapper.
+`<commit12>` ниже — первые 12 символов реально опубликованного commit, а не
+произвольная локальная ревизия. На каждом сервере используется точный путь:
+
+```sh
+site='/opt/hamvpn-cloud140-six/releases/<commit12>/ops/cloud140-six-20260918/site.py'
+```
+
+1. **Panel, root:** `python3 -B "$site" dns`, затем
+   `python3 -B "$site" dns-verify`. Первый шаг создаёт только четыре свободных
+   A DNS-only записей и фиксирует intent/record IDs до повторных действий.
+2. **Entry, gasan/sudo:** `sudo -n python3 -B "$site" http`.
+   Передаётся полученный публичный JSON, не весь SSH output/config.
+3. **Panel, root:** `python3 -B "$site" external-proof` с JSON предыдущего
+   шага на stdin. Проверка обязательно с другого сервера, не с entry.
+4. **Entry:** `sudo -n python3 -B "$site" certificate` с результатом
+   external-proof на stdin; затем `sudo -n python3 -B "$site" tls`.
+   Выпуск одного SAN-сертификата для четырёх имён; DNS-токен остаётся на panel.
+5. **Entry:** `sudo -n python3 -B "$site" challenge`; свежий JSON снова
+   передать в panel `external-proof`, затем результат на stdin команды entry
+   `sudo -n python3 -B "$site" renew`.
+6. **Entry:** `sudo -n python3 -B "$site" verify`. Успех renew отдельно
+   подтверждает staging dry-run и persistent timer. `verify` без успешного
+   renew не означает, что автопродление уже проверено.
+
+Перед profile cutover сохранить актуальные доказательства и snapshot. Проверки
+sidecar требуют неизменного старого nginx/listener/VPN baseline; чужой drift
+нельзя обходить перезаписью снимка. Внешний HTTPS через новые REALITY-порты,
+реальный VPN, legacy и main/auto подписки — отдельные gates координатора.
+Во всех четырёх frontend target должен быть `127.0.0.1:9444`; публичный 443 и
+старый target 9443 не занимать.
+
+При неопределённом ответе DNS/ACME сначала readback intent/state; не повторять
+POST/certonly вслепую. Для собственного отката сайта команда entry
+`sudo -n python3 -B "$site" rollback-site --confirm-unused-target` допустима
+только после проверки координатором, что ни один активный inbound не использует
+9444. DNS rollback на panel: `python3 -B "$site" dns-rollback`; только собственные
+неизменённые IDs. Старые сайт/сертификат/9443 не удаляются, certbot timer общий.
