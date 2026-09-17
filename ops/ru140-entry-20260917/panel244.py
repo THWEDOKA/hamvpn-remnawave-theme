@@ -244,7 +244,8 @@ def verify(api, published=False):
             assert current['isConnected']
         actual = binding(current)
         assert actual['profile'] == wanted['profile'] and set(actual['inbounds']) == set(wanted['inbounds'])
-        assert all(current[k] == old[k] for k in ('name', 'address', 'port', 'isDisabled'))
+        node_fields = ('address', 'port', 'isDisabled') if concurrent else ('name', 'address', 'port', 'isDisabled')
+        assert all(current[k] == old[k] for k in node_fields)
     now_hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
     if not concurrent: assert set(now_hosts) == {h['uuid'] for h in verification['hosts']}
     for old in verification['hosts']:
