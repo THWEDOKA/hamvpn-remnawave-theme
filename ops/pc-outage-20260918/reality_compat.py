@@ -23,6 +23,11 @@ SCOPES = {
                     node='560e38b3-6ee8-4f10-861e-e2f1eddd4caa',
                     address='193.233.222.244', tag='vless-entry244-de182',
                     port=18443, exit_ip='217.60.68.182'),
+    'aeza-remaining': dict(profile='8deddcaa-fd80-46ed-ac48-e4c5e93b0271',
+                    node='560e38b3-6ee8-4f10-861e-e2f1eddd4caa', address='193.233.222.244',
+                    routes=[dict(id='pl2', tag='vless-entry244-pl150', port=18444, exit_ip='31.56.188.150'),
+                            dict(id='nl5', tag='vless-entry244-nl82', port=18445, exit_ip='94.183.255.82'),
+                            dict(id='de4', tag='vless-entry244-de94', port=18446, exit_ip='62.60.226.94')]),
 }
 
 
@@ -41,15 +46,16 @@ def digest(value):
 
 def candidate(config, target):
     result = deepcopy(config)
-    selected = [i for i in result['inbounds'] if i['tag'] == target['tag']]
-    require(len(selected) == 1, 'Expected exactly one selected inbound')
-    inbound = selected[0]
-    require(inbound['protocol'] == 'vless' and inbound['port'] == target['port'], 'Inbound identity changed')
-    stream = inbound['streamSettings']
-    require(stream['security'] == 'reality', 'Inbound is not REALITY')
-    reality = stream['realitySettings']
-    require('minClientVer' not in reality, 'Refuse to overwrite explicit client-version policy')
-    reality['minClientVer'] = '1.8.2'
+    for route in target.get('routes', [target]):
+        selected = [i for i in result['inbounds'] if i['tag'] == route['tag']]
+        require(len(selected) == 1, 'Expected exactly one selected inbound')
+        inbound = selected[0]
+        require(inbound['protocol'] == 'vless' and inbound['port'] == route['port'], 'Inbound identity changed')
+        stream = inbound['streamSettings']
+        require(stream['security'] == 'reality', 'Inbound is not REALITY')
+        reality = stream['realitySettings']
+        require('minClientVer' not in reality, 'Refuse to overwrite explicit client-version policy')
+        reality['minClientVer'] = '1.8.2'
     return result
 
 
@@ -163,7 +169,11 @@ class Timer:
         require(self.active(), 'Rollback timer not armed')
 
     def cancel(self):
-        self.run(['systemctl', 'stop', self.unit + '.timer', self.unit + '.service'])
+        # Stopping the timer can garbage-collect its inactive transient service
+        # before systemctl processes the second name. A nonzero stop status is
+        # acceptable ONLY when both fresh states independently prove inactive.
+        subprocess.run(['systemctl', 'stop', self.unit + '.timer', self.unit + '.service'],
+                       capture_output=True, text=True, timeout=30)
         require(all(self.state(s)['ActiveState'] == 'inactive' for s in ('timer', 'service')),
                 'Rollback timer/service still active')
 
@@ -183,7 +193,8 @@ class Operation:
         node = next(n for n in nodes if n['uuid'] == self.target['node'])
         if healthy:
             require(node['isConnected'] and not node['isDisabled'], 'Canary node is not healthy')
-        require(self.target['tag'] in [i['tag'] for i in node['configProfile']['activeInbounds']],
+        require({r['tag'] for r in self.target.get('routes', [self.target])} <=
+                {i['tag'] for i in node['configProfile']['activeInbounds']},
                 'Canary inbound is not active')
         return profile, attached
 
@@ -194,7 +205,8 @@ class Operation:
         record = dict(profile=profile, consumers=attached, candidate=new,
                       candidate_sha256=digest(new), timestamp=self.clock())
         self.store.put('before', record)
-        return dict(planned=True, scope=self.scope, sha256=digest(new), changed_fields=1)
+        return dict(planned=True, scope=self.scope, sha256=digest(new),
+                    changed_fields=len(self.target.get('routes', [self.target])))
 
     def load(self):
         record = self.store.get('before')
@@ -272,12 +284,21 @@ class Operation:
         self.fresh(proof, record)
         require(proof['timestamp'] >= self.store.get('applied')['timestamp'], 'Proof predates deployment')
         tests = proof.get('tests', [])
-        required = {'mihomo-firefox', 'mihomo-chrome', 'xray-firefox', 'xray-chrome'}
-        require(len(tests) == 4 and {t.get('id') for t in tests} == required, 'Four protocol proofs required')
-        require(all(t.get('http') == '204' and t.get('exit_ip') == self.target['exit_ip'] and
+        kinds = ('mihomo-firefox', 'mihomo-chrome', 'xray-firefox', 'xray-chrome')
+        required = {(route['id'] + '-' if 'routes' in self.target else '') + kind: route['exit_ip']
+                    for route in self.target.get('routes', [self.target]) for kind in kinds}
+        require(len(tests) == len(required) and {t.get('id') for t in tests} == set(required),
+                'Four protocol proofs per route required')
+        require(all(t.get('http') == '204' and t.get('exit_ip') == required[t['id']] and
                     t.get('curl_codes') == [0, 0] and t.get('listener_removed') is True for t in tests),
                 'End-to-end proof failed')
-        require(proof.get('live_mihomo_delay', 0) > 0, 'Running application canary proof required')
+        if 'routes' in self.target:
+            delays = proof.get('live_mihomo_delays', {})
+            require(set(delays) == {r['id'] for r in self.target['routes']} and
+                    all(type(v) in (float, int) and v > 0 for v in delays.values()),
+                    'Running application proofs required for all routes')
+        else:
+            require(proof.get('live_mihomo_delay', 0) > 0, 'Running application canary proof required')
         self.store.put('traffic-proof', proof)
         # Mark first under the same flock: a timer racing disarm must see finished.
         self.store.put('finished', dict(timestamp=self.clock(), sha256=record['candidate_sha256']))

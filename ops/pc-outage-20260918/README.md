@@ -55,3 +55,19 @@ proof files are immutable, root-owned 0600, in a 0700 directory. No deployment
 credentials or customer subscription content belong in this repository.
 
 Tests: `py -3.13 -B -m unittest discover -s ops/pc-outage-20260918 -p 'test_*.py'`.
+
+## Verified canary outcome
+
+Germany-3 passed isolated Mihomo and Xray checks with both Firefox and Chrome
+fingerprints: HTTPS 204, German egress, and all temporary listeners removed.
+The running Mihomo application reported 444 ms; the user separately confirmed
+successful websites in Koala from Russia. The candidate hash is
+`ba2278601575fc11cdf82f9a5335e527f39775b225308a067259165281cadfed`.
+Both the original rollback and the additional safety timer/service were verified
+inactive after the accepted proof. No client identity or DNS was changed.
+
+The next explicit scope, `aeza-remaining`, only adds the same field to the
+Poland-2, Netherlands-5 and Germany-4 public inbounds on this single entry.
+It preserves the successful canary and disabled legacy host. Completion requires
+four real protocol/fingerprint checks per route, expected foreign egress and
+running-application delay checks for each. This is a plan, not a batch result.

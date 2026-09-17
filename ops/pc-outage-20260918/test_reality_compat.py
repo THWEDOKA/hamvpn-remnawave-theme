@@ -62,6 +62,18 @@ class Tests(unittest.TestCase):
             c = config(); c['inbounds'][0]['streamSettings']['realitySettings']['minClientVer'] = value
             with self.assertRaises(RuntimeError): r.candidate(c, self.target)
 
+    def test_remaining_batch_preserves_successful_canary_and_legacy(self):
+        original = config()
+        original['inbounds'][0]['streamSettings']['realitySettings']['minClientVer'] = '1.8.2'
+        for route in r.SCOPES['aeza-remaining']['routes']:
+            inbound = copy.deepcopy(config()['inbounds'][0])
+            inbound.update(tag=route['tag'], port=route['port'])
+            original['inbounds'].append(inbound)
+        changed = r.candidate(original, r.SCOPES['aeza-remaining'])
+        for inbound in changed['inbounds'][2:]:
+            self.assertEqual(inbound['streamSettings']['realitySettings'].pop('minClientVer'), '1.8.2')
+        self.assertEqual(changed, original)
+
     def test_shared_consumer_refused(self):
         self.nodes.append({**self.nodes[0], 'uuid': 'unrelated-node'})
         with self.assertRaises(RuntimeError): self.op.plan()
@@ -151,9 +163,9 @@ class TimerTests(unittest.TestCase):
 
     def test_cancel_stops_and_checks_service_too(self):
         timer = r.Timer('aeza-de3')
-        with patch.object(timer, 'run') as run, patch.object(timer, 'state', return_value={'ActiveState': 'inactive'}) as state:
+        with patch.object(r.subprocess, 'run', return_value=SimpleNamespace(returncode=5)) as run, patch.object(timer, 'state', return_value={'ActiveState': 'inactive'}) as state:
             timer.cancel()
-            run.assert_called_once_with(['systemctl', 'stop', timer.unit + '.timer', timer.unit + '.service'])
+            self.assertEqual(run.call_args.args[0], ['systemctl', 'stop', timer.unit + '.timer', timer.unit + '.service'])
             self.assertEqual([call.args[0] for call in state.call_args_list], ['timer', 'service'])
 
 
