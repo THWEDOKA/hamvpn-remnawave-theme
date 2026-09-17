@@ -34,3 +34,23 @@ blocking; each exit has its own connection so one exit does not transit others.
 References: [nginx SNI passthrough](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html),
 [OpenSSH forwarding restrictions](https://man.openbsd.org/sshd_config),
 [Xray routing](https://xtls.github.io/en/config/routing.html).
+# Rollout status: entry140 superseded, not published
+
+On 2026-09-17 the user replaced the proposed public entry with 162.141.185.208.
+The entry140 backend and loopback VPN probes succeeded, but authenticated public
+ingress probes did not. Customer hosts were **not** switched to entry140.
+Do not run its `publish` action for the new entry or reuse its snapshot as a
+fresh migration baseline. Staged services and root-only recovery data remain;
+this is not a claim that entry140 was uninstalled.
+
+`prune_hosts.py` is a separate, narrowly scoped operation authorized by the user:
+retire the eight Hysteria2/XHTTP/Salamander host records belonging to these four
+exits, preserving their four ordinary visible hosts and four hidden VLESS auto
+pool records. It changes only `isDisabled`; records remain recoverable. It
+does not alter DNS, nodes, profiles, credentials or another server's hosts.
+The script snapshots all hosts, node bindings, exit profiles and a real Happ
+subscription in `/root/hamvpn-four-exit-host-cleanup-20260917`, verifies the
+restricted delta and subscription, and rolls back its flags on a failed check.
+Its operation order is `snapshot`, `apply`, `verify`; `rollback` restores the
+saved flags with concurrent-change guards. Do not blindly repeat `snapshot`
+or `apply` after an interrupted response.
