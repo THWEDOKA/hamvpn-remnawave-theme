@@ -225,9 +225,10 @@ def activate(api):
 def verify(api, published=False):
     before = read('before'); created = read('created')
     assert hashlib.sha256((STATE / 'before.json').read_bytes()).hexdigest() == read('before-checksum')['sha256']
+    verification = read('verification-baseline') if exists('verification-baseline') else before
     now_nodes = {n['uuid']: n for n in api('GET', '/api/nodes/')}
-    assert set(now_nodes) == {n['uuid'] for n in before['nodes']}
-    for old in before['nodes']:
+    assert set(now_nodes) == {n['uuid'] for n in verification['nodes']}
+    for old in verification['nodes']:
         current = now_nodes[old['uuid']]
         wanted = binding(old)
         if old['uuid'] == NODE:
@@ -237,8 +238,8 @@ def verify(api, published=False):
         assert actual['profile'] == wanted['profile'] and set(actual['inbounds']) == set(wanted['inbounds'])
         assert all(current[k] == old[k] for k in ('name', 'address', 'port', 'isDisabled'))
     now_hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
-    assert set(now_hosts) == {h['uuid'] for h in before['hosts']}
-    for old in before['hosts']:
+    assert set(now_hosts) == {h['uuid'] for h in verification['hosts']}
+    for old in verification['hosts']:
         wanted = copy.deepcopy(old)
         if old['uuid'] in OLD_HOSTS: wanted.update(legacy_host(old))
         if published and old['uuid'] in TARGET_HOSTS: wanted.update(target_host(old))

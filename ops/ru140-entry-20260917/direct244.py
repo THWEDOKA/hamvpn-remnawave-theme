@@ -134,9 +134,39 @@ def sites():
     return {'public_sites_verified':results}
 
 
+def preserve_concurrent():
+    """Refresh verification of unrelated edits; never change original rollback data."""
+    assert not exists('verification-baseline') and not exists('publish-intent')
+    assert read('new-probes')['all_passed'] and exists('activated') and not exists('rollback')
+    api,_=p.prior.create_client();before=read('before');created=read('created')
+    nodes=api('GET','/api/nodes/');hosts=api('GET','/api/hosts/')
+    indexed_nodes={v['uuid']:v for v in nodes};indexed_hosts={v['uuid']:v for v in hosts}
+    assert {v['uuid'] for v in before['nodes']} <= indexed_nodes.keys()
+    assert {v['uuid'] for v in before['hosts']} <= indexed_hosts.keys()
+    scoped_nodes={NODE,'22ac9320-4762-461d-b877-a9f33b58d492',*[node['node'] for node in NODES]}
+    for old in before['nodes']:
+        if old['uuid'] not in scoped_nodes: continue
+        current=indexed_nodes[old['uuid']];wanted=p.binding(old)
+        if old['uuid']==NODE: wanted={'profile':created['profile'],'inbounds':[created['legacy'],*created['inbounds'].values()]}
+        assert p.binding(current)['profile']==wanted['profile']
+        assert set(p.binding(current)['inbounds'])==set(wanted['inbounds'])
+        assert all(current[k]==old[k] for k in ('name','address','port','isDisabled'))
+    for old in before['hosts']:
+        if old['uuid'] not in OLD_HOSTS|TARGET_HOSTS: continue
+        expected=copy.deepcopy(old)
+        if old['uuid'] in OLD_HOSTS: expected.update(p.legacy_host(old))
+        assert p.prior.stable_host(indexed_hosts[old['uuid']])==p.prior.stable_host(expected)
+    for pid,profile in before['profiles'].items():
+        assert api('GET','/api/config-profiles/'+pid)['config']==profile['config']
+    baseline={'nodes':[v for v in nodes if v['uuid'] not in scoped_nodes]+[v for v in before['nodes'] if v['uuid'] in scoped_nodes],
+              'hosts':[v for v in hosts if v['uuid'] not in OLD_HOSTS|TARGET_HOSTS]+[v for v in before['hosts'] if v['uuid'] in OLD_HOSTS|TARGET_HOSTS]}
+    save('verification-baseline',baseline)
+    return {'concurrent_unrelated_changes_preserved':True,'original_scope_and_rollback_unchanged':True}
+
+
 if __name__=='__main__':
     os.umask(0o077)
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['prepare','stage','entry-check','entry-finish','sites'])
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['prepare','stage','entry-check','entry-finish','sites','preserve_concurrent'])
     action=parser.parse_args().action
     result=entry_check(action=='entry-finish') if action.startswith('entry-') else globals()[action]()
     print(json.dumps(result))
