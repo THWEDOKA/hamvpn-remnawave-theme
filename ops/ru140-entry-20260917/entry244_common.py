@@ -32,6 +32,22 @@ def exists(name):
     return (STATE / (name + '.json')).exists()
 
 
+def unit_inactive(unit):
+    result = subprocess.run(['systemctl', 'is-active', '--quiet', unit], capture_output=True)
+    if result.returncode == 3:
+        return True
+    if result.returncode != 4:
+        return False
+    # systemd garbage-collects stopped transient timers; distinguish that from
+    # a command failure instead of treating arbitrary nonzero exit codes as safe.
+    state = subprocess.run(['systemctl', 'show', unit, '-p', 'LoadState', '-p', 'ActiveState', '-p', 'SubState'],
+                           capture_output=True, text=True)
+    if state.returncode or not isinstance(state.stdout, str):
+        return False
+    fields = dict(line.split('=', 1) for line in state.stdout.splitlines() if '=' in line)
+    return fields == {'LoadState': 'not-found', 'ActiveState': 'inactive', 'SubState': 'dead'}
+
+
 def run(*args, data=None):
     result = subprocess.run(args, input=data, capture_output=True, text=True)
     if result.returncode:

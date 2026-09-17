@@ -317,7 +317,7 @@ def finish(api):
     result = verify(api, True)
     subprocess.run(['systemctl', 'stop', TIMER + '.timer'], check=True, capture_output=True)
     for suffix in ('.timer', '.service'):
-        assert subprocess.run(['systemctl', 'is-active', '--quiet', TIMER + suffix], capture_output=True).returncode == 3
+        assert unit_inactive(TIMER + suffix)
     assert not exists('rollback'), 'Rollback raced with finish'
     result = verify(api, True)
     save('finished', {'timestamp': time.time(), **result})

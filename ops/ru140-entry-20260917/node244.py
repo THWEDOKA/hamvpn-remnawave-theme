@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from entry244_common import ROOT, STATE, ENTRY, NODES, save, read, exists, run
+from entry244_common import ROOT, STATE, ENTRY, NODES, save, read, exists, run, unit_inactive
 
 STREAM = Path('/etc/nginx/modules-enabled/90-ham-entry244-stream.conf')
 SITE = Path('/etc/nginx/sites-available/ham-entry244.conf')
@@ -343,8 +343,7 @@ def finish():
     require(STREAM.is_file() and digest(STREAM) == read('stream-intent')['sha256'], 'Stream config changed or missing')
     run('systemctl', 'stop', TIMER + '.timer')
     for suffix in ('.timer', '.service'):
-        status = subprocess.run(['systemctl', 'is-active', '--quiet', TIMER + suffix], capture_output=True).returncode
-        require(status == 3, 'Rollback unit not confirmed inactive; finish refused')
+        require(unit_inactive(TIMER + suffix), 'Rollback unit not confirmed inactive; finish refused')
     require(not exists('nginx-rolled-back'), 'Rollback raced with finish')
     require(STREAM.is_file() and digest(STREAM) == read('stream-intent')['sha256'], 'Stream changed during finish')
     require(digest(SITE) == read('certificate')['site_sha256'], 'TLS site changed during finish')
