@@ -1,5 +1,6 @@
 """Fresh entry only. Root-only keys, isolated management, no default-route edits."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -117,9 +118,10 @@ def start():
 
 def test():
     config=sys.stdin.read();p=subprocess.run(['docker','run','--rm','-i','--network','host','--entrypoint','xray',IMAGE,'run','-test','-c','stdin:'],input=config,capture_output=True,text=True)
-    save('xray-test',{'passed':p.returncode==0,'output':p.stdout+p.stderr})
+    proof={'installed_xray_test_passed':p.returncode==0,'sha256':hashlib.sha256(config.strip().encode()).hexdigest()}
+    save('xray-test',{'passed':p.returncode==0,'output':p.stdout+p.stderr,**proof})
     assert p.returncode==0,'Candidate rejected; details private'
-    return {'installed_xray_test_passed':True}
+    return proof
 
 
 def compatibility():
@@ -138,7 +140,9 @@ def compatibility():
 
 def main():
     os.umask(0o077);assert os.geteuid()==0;assert_ip(ENTRY)
-    p=argparse.ArgumentParser();p.add_argument('action',choices=['install','certificate','links','start','test','public-key','renew-test','compatibility']);p.add_argument('--id',choices=[n['id'] for n in NODES]);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('action',choices=['install','certificate','links','start','test','test-proof','public-key','renew-test','compatibility']);p.add_argument('--id',choices=[n['id'] for n in NODES]);a=p.parse_args()
+    if a.action=='test-proof':
+        proof=read('xray-test');print(json.dumps({k:proof[k] for k in ('installed_xray_test_passed','sha256')}));return
     if a.action=='public-key':
         assert a.id;print((KEYS/(a.id+'.pub')).read_text().strip());return
     if a.action=='renew-test':

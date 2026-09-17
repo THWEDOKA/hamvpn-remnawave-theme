@@ -303,7 +303,9 @@ def main():
         'publish','verify','rollback','subscription','cleanup','finish','export-candidate','export-node-key','accept-test']);a=p.parse_args()
     if a.action=='export-candidate':print(json.dumps(read('candidate')));return
     if a.action=='accept-test':
-        data=json.load(sys.stdin);assert data['installed_xray_test_passed'];save('installed-xray-test',data);print('{"accepted":true}');return
+        data=json.load(sys.stdin);assert data['installed_xray_test_passed']
+        assert data['sha256']==digest(STATE/'candidate.json')
+        save('installed-xray-test',data);print('{"accepted":true}');return
     api,query=create_client()
     if a.action=='export-node-key':print(json.dumps(api('GET','/api/keygen/')));return
     if a.action=='cleanup':result=cleanup(api,query)
