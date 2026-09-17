@@ -509,6 +509,13 @@ class FrontendTests(unittest.TestCase):
 
 
 class SystemdTests(unittest.TestCase):
+    def test_collected_transient_units_use_structured_inactive_state(self):
+        runner = lambda *args, **kwargs: SimpleNamespace(returncode=1,
+            stdout='LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success\n')
+        timer = f.Timers(runner)
+        timer.inactive(f.FRONT_TIMER)
+        timer.service_idle(f.FRONT_TIMER)
+
     def test_frontend_start_uses_frontend_script_ten_minutes_and_no_shell(self):
         calls = []
         def runner(args, **kwargs):

@@ -92,9 +92,6 @@ class Timers(c.SystemdTimer):
     def inactive(self, name):
         require(name in (FRONT_TIMER, c.SystemdTimer.name(ID)), 'Unowned timer')
         for suffix in ('.timer', '.service'):
-            result = self.run(['systemctl', 'is-active', name + suffix], capture_output=True, text=True, timeout=15)
-            require(result.returncode == 3 and result.stdout.strip() == 'inactive',
-                    'Timer/service is not confirmed inactive')
             state = self.state(name + suffix, allow_missing=True)
             require(state.get('ActiveState') == 'inactive' and state.get('SubState') == 'dead'
                     and state.get('LoadState') in ('loaded', 'not-found')
@@ -102,10 +99,9 @@ class Timers(c.SystemdTimer):
 
     def service_idle(self, name):
         require(name in (FRONT_TIMER, c.SystemdTimer.name(ID)), 'Unowned timer')
-        result = self.run(['systemctl', 'is-active', name + '.service'], capture_output=True, text=True, timeout=15)
-        require(result.returncode == 3 and result.stdout.strip() == 'inactive', 'Rollback service is not inactive')
         state = self.state(name + '.service', allow_missing=True)
         require(state.get('ActiveState') == 'inactive' and state.get('SubState') == 'dead'
+                and state.get('LoadState') in ('loaded', 'not-found')
                 and state.get('Result', 'success') in ('', 'success'), 'Rollback service failed')
 
 
