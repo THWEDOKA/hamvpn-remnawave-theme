@@ -82,6 +82,27 @@ class Tests(unittest.TestCase):
         with self.assertRaises(RuntimeError): self.op.apply()
         self.assertFalse(self.timer.active()); self.assertEqual(self.writes, [])
 
+    def test_derived_raw_inbound_is_not_an_assignment_change(self):
+        self.ready()
+        self.nodes[0]['configProfile']['activeInbounds'][0]['rawInbound'] = {'owned-version-change': True}
+        self.op.apply()
+        self.assertEqual(len(self.writes), 1)
+
+    def test_changed_inbound_identity_still_rejected(self):
+        self.ready()
+        self.nodes[0]['configProfile']['activeInbounds'][0]['uuid'] = 'different-inbound'
+        with self.assertRaises(RuntimeError): self.op.apply()
+        self.assertEqual(self.writes, [])
+
+    def test_uncertain_apply_reconciles_without_another_patch(self):
+        self.ready()
+        self.store.put('apply-intent', {'timestamp': 999})
+        self.profile['config'] = self.op.load()['candidate']
+        self.timer.arm()
+        self.op.reconcile_applied()
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.store.get('applied'), {'timestamp': 999})
+
     def test_apply_and_exact_rollback(self):
         original = config(); self.ready(); self.op.apply()
         self.assertTrue(self.timer.active())

@@ -114,10 +114,19 @@ class Store:
             os.close(fd)
 
 
+def consumer_bindings(nodes):
+    # activeInbounds may contain derived rawInbound configuration. That payload
+    # legitimately changes with this PATCH; compare assignments/identities only.
+    return sorted([dict(uuid=n['uuid'], address=n['address'], configProfile=dict(
+        activeConfigProfileUuid=n['configProfile']['activeConfigProfileUuid'],
+        activeInbounds=sorted([dict(uuid=i['uuid'], tag=i['tag'])
+                              for i in n['configProfile']['activeInbounds']], key=lambda i: i['uuid'])))
+        for n in nodes], key=lambda n: n['uuid'])
+
+
 def consumers(nodes, profile):
-    return sorted([dict(uuid=n['uuid'], address=n['address'], configProfile=n['configProfile'])
-                   for n in nodes if n.get('configProfile', {}).get('activeConfigProfileUuid') == profile],
-                  key=lambda n: n['uuid'])
+    return consumer_bindings([n for n in nodes
+                              if n.get('configProfile', {}).get('activeConfigProfileUuid') == profile])
 
 
 class Timer:
@@ -196,7 +205,7 @@ class Operation:
     def check(self, expected, healthy=True):
         record = self.load()
         profile, attached = self.collect(healthy=healthy)
-        require(profile['config'] == expected and attached == record['consumers'], 'Live configuration drift')
+        require(profile['config'] == expected and attached == consumer_bindings(record['consumers']), 'Live configuration drift')
         return record
 
     def fresh(self, proof, record):
@@ -226,13 +235,23 @@ class Operation:
         self.store.put('applied', dict(timestamp=self.clock()))
         return dict(applied=True, rollback_seconds=600, sha256=record['candidate_sha256'])
 
+    def reconcile_applied(self):
+        """Readback only after an uncertain PATCH; never repeat the API mutation."""
+        require(self.store.exists('apply-intent') and not self.store.exists('applied') and
+                not self.store.exists('rolled-back') and not self.store.exists('finished'),
+                'Not an uncertain owned apply')
+        record = self.check(self.load()['candidate'], healthy=False)
+        require(self.timer.active(), 'Rollback protection missing')
+        self.store.put('applied', self.store.get('apply-intent'))
+        return dict(owned_patch_readback_verified=True, sha256=record['candidate_sha256'])
+
     def rollback(self):
         record = self.load()
         require(self.store.exists('apply-intent'), 'No owned apply attempt')
         if self.store.exists('finished'):
             return dict(rollback_skipped_finished=True)
         profile, attached = self.collect(healthy=False)
-        require(attached == record['consumers'] and
+        require(attached == consumer_bindings(record['consumers']) and
                 profile['config'] in (record['candidate'], record['profile']['config']), 'Refuse rollback over unrelated changes')
         if profile['config'] == record['candidate']:
             self.api('PATCH', '/api/config-profiles/', dict(uuid=self.target['profile'], config=record['profile']['config']))
@@ -270,7 +289,7 @@ class Operation:
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['plan', 'export-candidate', 'accept-installed', 'apply', 'rollback', 'finish', 'status'])
+    parser.add_argument('action', choices=['plan', 'export-candidate', 'accept-installed', 'apply', 'reconcile-applied', 'rollback', 'finish', 'status'])
     parser.add_argument('--scope', choices=SCOPES, required=True)
     parser.add_argument('--secret-stdout', action='store_true')
     args = parser.parse_args()
@@ -291,7 +310,7 @@ def main():
             result = dict(sha256=record['candidate_sha256'], live_candidate=live['config'] == record['candidate'],
                           rollback_active=op.timer.active(), finished=store.exists('finished'))
         else:
-            result = getattr(op, args.action)()
+            result = getattr(op, args.action.replace('-', '_'))()
     print(json.dumps(result))
 
 
