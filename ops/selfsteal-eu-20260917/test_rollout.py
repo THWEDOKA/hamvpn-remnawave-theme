@@ -28,6 +28,11 @@ class Templates(unittest.TestCase):
     def test_python_compiles(self):
         for file in ROOT.glob('*.py'): compile(file.read_text(encoding='utf-8'), str(file), 'exec')
 
+    def test_subscription_pool_uses_verified_selector(self):
+        source = (ROOT / 'panel.py').read_text(encoding='utf-8')
+        self.assertIn("'tags': ['AUTO_BASE_POOL'] if is_hidden else []", source)
+        self.assertIn("'pattern': '^AUTO_BASE_POOL$'", source)
+
     def test_firewall_scoped(self):
         source = (ROOT / 'firewall.sh').read_text()
         self.assertIn('64.225.109.248/32', source)

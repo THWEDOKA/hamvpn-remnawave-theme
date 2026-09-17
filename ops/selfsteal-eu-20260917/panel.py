@@ -110,6 +110,7 @@ def stage(api, n):
         host = api('POST', '/api/hosts/', {'remark': remark, 'address': n['domain'], 'port': 443,
             'host': n['domain'], 'sni': n['domain'], 'fingerprint': 'firefox', 'isHidden': is_hidden,
             'isDisabled': True, 'nodes': [created['node']], 'excludedInternalSquads': [],
+            'tags': ['AUTO_BASE_POOL'] if is_hidden else [],
             'inbound': {'configProfileUuid': created['profile'], 'configProfileInboundUuid': created['inbound']}})
         created['hosts'].append(host['uuid']); save(n['id'] + '-created', created)
     for squad in selected:
@@ -119,6 +120,23 @@ def stage(api, n):
         result = api('PATCH', '/api/internal-squads/', {'uuid': squad['uuid'], 'inbounds': intended})
         assert set(ids(result)) == set(intended)
     return {'id': n['id'], 'staged': True, 'hosts_disabled': len(created['hosts']), 'squads': [s['name'] for s in selected]}
+
+
+def auto_membership(api, n):
+    """Join the actual existing tag selector, editing only this rollout's hidden host."""
+    template = api('GET', '/api/subscription-templates/61db91b0-d5db-4493-beeb-a598e8cf8e7b')
+    selectors = template['templateJson']['remnawave']['injectHosts']
+    assert any(s['selector'] == {'type': 'tagRegex', 'pattern': '^AUTO_BASE_POOL$'} for s in selectors)
+    c = read(n['id'] + '-created')
+    for hid in c['hosts']:
+        host = api('GET', '/api/hosts/' + hid)
+        assert host['nodes'] == [c['node']] and host['address'] == n['domain']
+        if host['isHidden']:
+            save(n['id'] + '-hidden-before-tags', host)
+            tags = list(dict.fromkeys(host.get('tags', []) + ['AUTO_BASE_POOL']))
+            api('PATCH', '/api/hosts/', {'uuid': hid, 'tags': tags})
+            assert api('GET', '/api/hosts/' + hid)['tags'] == tags
+    return {'id': n['id'], 'normal_auto_pool_membership': True, 'existing_template_unchanged': True}
 
 
 def create_test(api):
@@ -247,7 +265,7 @@ def cleanup(api, query):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['stage', 'create-test', 'probe', 'publish', 'subscription', 'verify', 'rollback', 'cleanup'])
+    parser.add_argument('action', choices=['stage', 'create-test', 'probe', 'publish', 'subscription', 'verify', 'rollback', 'cleanup', 'auto-membership'])
     parser.add_argument('--id', choices=[n['id'] for n in NODES])
     args = parser.parse_args(); api, query = create_client()
     if args.action == 'cleanup': result = cleanup(api, query)
@@ -255,7 +273,7 @@ def main():
     elif args.action == 'verify': result = verify(api)
     else:
         assert args.id, 'Node ID required'
-        result = globals()[args.action](api, next(n for n in NODES if n['id'] == args.id))
+        result = globals()[args.action.replace('-', '_')](api, next(n for n in NODES if n['id'] == args.id))
     print(json.dumps(result, ensure_ascii=False))
 
 
