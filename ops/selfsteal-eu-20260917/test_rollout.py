@@ -34,5 +34,26 @@ class Templates(unittest.TestCase):
         self.assertNotIn('iptables -F', source)
         self.assertNotIn('--dport 22 ', source)
 
+    def test_fresh_candidate_does_not_mutate_shared_profile(self):
+        spec = importlib.util.spec_from_file_location('eu_panel', ROOT / 'panel.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        original = {'inbounds': [{'tag': 'old', 'port': 443, 'protocol': 'vless'}],
+                    'outbounds': [{'tag': 'DIRECT', 'protocol': 'freedom'}],
+                    'routing': {'rules': [{'inboundTag': ['old', 'other'], 'outboundTag': 'DIRECT'}]}}
+        serialized = json.dumps(original)
+        configs = [module.candidate(original, n, 'test-key-only') for n in module.NODES]
+        self.assertEqual(json.dumps(original), serialized)
+        self.assertEqual(len({c['inbounds'][0]['tag'] for c in configs}), 4)
+        for n, c in zip(module.NODES, configs):
+            inbound = c['inbounds'][0]
+            self.assertEqual(inbound['settings']['clients'], [])
+            reality = inbound['streamSettings']['realitySettings']
+            self.assertEqual(reality['serverNames'], [n['domain']])
+            self.assertEqual(reality['target'], '127.0.0.1:8443')
+            self.assertNotIn('dest', reality)
+            self.assertEqual(len(reality['shortIds'][0]), 16)
+            self.assertEqual(c['routing']['rules'][0]['inboundTag'], [inbound['tag'], 'other'])
+            self.assertEqual(c['outbounds'], original['outbounds'])
+
 
 if __name__ == '__main__': unittest.main()
