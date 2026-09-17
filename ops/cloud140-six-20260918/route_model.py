@@ -331,7 +331,10 @@ must pass the exact transport that passed authenticated entry-namespace probes.
         _require(destination['address'] == '127.0.0.1', 'Plain VLESS backend is loopback-only')
         _require(not user.get('flow'), 'Plain SSH backend must not request TLS Vision flow')
     else:
-        _require(destination['address'] == node['ip'], 'Encrypted backend must target selected exit IP')
+        tunnel_port = {'at': 21445, 'gbpower': 21448}.get(exit_id)
+        _require(destination['address'] == node['ip'] or
+                 security == 'reality' and destination['address'] == '127.0.0.1' and destination['port'] == tunnel_port,
+                 'Encrypted backend must target selected exit or its verified fixed SSH forward')
         options = stream.get(security_key)
         _require(isinstance(options, dict), 'Missing explicit backend security settings')
         _domain(options.get('serverName'))

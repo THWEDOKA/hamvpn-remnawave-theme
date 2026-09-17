@@ -193,6 +193,35 @@ class CoordinatorTests(unittest.TestCase):
                 self.assertLessEqual(len(plan['name']), 30)
                 self.assertLessEqual(len(plan['squad_name']), 30)
 
+    def forward_proof(self):
+        record=self.store.get('operation');route=c.target(self.route_id)
+        return dict(id=self.route_id,node=route['node'],ip=route['ip'],timestamp=self.now,sha256=record['sha256'],entry=c.p.ENTRY,
+                    direct_failure=dict(timestamp=self.now,sha256=record['sha256'],entry=c.p.ENTRY,authenticated_direct_attempted=True,passed=False),
+                    tunnel=dict(listener_address='127.0.0.1',listener_port={'at':21445,'gbpower':21448}[self.route_id],
+                    target_address=route['ip'],target_port=15444,ssh_server=route['ip'],host_key_pinned=True,restricted_identity=True,
+                    fixed_target_verified=True,persistent_service_verified=True,restart_recovery_verified=True,loopback_only=True))
+
+    def test_forward_keeps_exit_config_and_identity_and_requires_new_probe(self):
+        self.apply(); before=deepcopy(self.api.profiles);writes=len(self.api.writes)
+        self.worker.attach_forward('at',self.forward_proof())
+        self.assertEqual(before,self.api.profiles);self.assertEqual(writes,len(self.api.writes))
+        out=self.worker.export_backend('at')
+        self.assertEqual(out['transport'],'forward-ssh+reality')
+        self.assertEqual(out['outbound']['settings']['vnext'][0]['address'],'127.0.0.1')
+        self.assertEqual(out['outbound']['settings']['vnext'][0]['port'],21445)
+        proof=self.proof('backend')
+        with self.assertRaises(c.SafetyError):self.worker.accept_backend('at',proof)
+        proof['tests'][0]['transport']='forward-ssh+reality'
+        self.worker.accept_backend('at',proof)
+
+    def test_forward_rejects_unchecked_source_endpoint_and_public_listener(self):
+        self.apply()
+        for part,key,value in [('tunnel','listener_address','0.0.0.0'),('tunnel','target_address','192.0.2.1'),
+                              ('tunnel','fixed_target_verified',False),('direct_failure','passed',True)]:
+            proof=self.forward_proof();proof[part][key]=value
+            with self.assertRaises(c.SafetyError):self.worker.attach_forward('at',proof)
+        self.assertNotIn('forward_tunnel',self.store.get('operation'))
+
     def test_withdrawn_gb_us1_are_rejected_before_any_state_or_api_access(self):
         for route_id in ('gb', 'us1'):
             for action in ('prepare', 'stage', 'apply'):

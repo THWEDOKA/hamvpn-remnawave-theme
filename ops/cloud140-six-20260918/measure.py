@@ -61,9 +61,10 @@ def panel(action, route_id, payload=None):
         if after:
             backend=actual.pop(route_id+'-backend')
             p.require(backend['passed'] and backend['listener_removed'] and backend['curl_codes']==[0,0], 'New backend did not pass')
-            expected_wire=worker.export_backend(route_id)['outbound']
+            exported=worker.export_backend(route_id)
+            expected_wire=exported['outbound']
             p.require(backend['wire_sha256']==p.digest(expected_wire),'Backend actual wire differs')
-            tests.append(dict(kind='backend',namespace='entry-xray',authenticated=True,http_code=int(backend['http']),
+            tests.append(dict(kind='backend',namespace='entry-xray',transport=exported['transport'],authenticated=True,http_code=int(backend['http']),
                               exit_ip=backend['exit_ip'],returncode=0))
         p.require(not actual,'Unexpected probe')
         proof=dict(**before['route'],sha256=record['sha256'],timestamp=min([raw['timestamp']]+[v['timestamp'] for v in external]),tests=tests)

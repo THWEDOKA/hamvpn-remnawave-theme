@@ -390,10 +390,14 @@ class Coordinator:
                 self._legacy_test(test, plan)
         else:
             require(proof.get('entry') == p.ENTRY and proof.get('mode') == plan['inputs']['mode'], 'Backend proof source/transport mismatch')
+            if 'forward_tunnel' in record:
+                fresh(proof['timestamp'],self.clock(),record['forward_tunnel']['timestamp'])
             backend = [t for t in tests if t.get('kind') == 'backend']
             legacy = [t for t in tests if t.get('kind') == 'legacy']
             require(len(backend) == 1 and backend[0].get('namespace') == 'entry-xray'
                     and len(tests) == len(legacy) + 1, 'Backend or cached legacy probes incomplete')
+            if 'forward_tunnel' in record:
+                require(backend[0].get('transport')=='forward-ssh+reality','Probe must exercise attached SSH forward')
             require(all(t.get('authenticated') is True and type(t.get('returncode')) is int and t['returncode'] == 0
                         and type(t.get('http_code')) is int and t['http_code'] == 204
                         and t.get('exit_ip') == plan['inputs']['expected_egress'] for t in backend), 'Backend authentication/status/egress mismatch')
@@ -675,11 +679,47 @@ class Coordinator:
                 serverName=inputs['server_names'][0], fingerprint='chrome',
                 publicKey=p.public_key(plan['identity']['privateKey']), shortId=plan['identity']['shortIds'][0]))
             address, port = before['route']['ip'], inputs['backend_port']
+            if 'forward_tunnel' in record:
+                address, port = '127.0.0.1', record['forward_tunnel']['tunnel']['listener_port']
         else:
             stream = dict(network='raw', security='none')
             address, port = '127.0.0.1', inputs['tunnel']['listener_port']
         outbound = dict(protocol='vless', settings=dict(vnext=[dict(address=address, port=port, users=[user])]), streamSettings=stream)
-        return dict(id=route_id, sha256=record['sha256'], expected_egress=inputs['expected_egress'], mode=inputs['mode'], outbound=outbound)
+        return dict(id=route_id, sha256=record['sha256'], expected_egress=inputs['expected_egress'], mode=inputs['mode'],
+                    transport='forward-ssh+reality' if 'forward_tunnel' in record else inputs['mode'], outbound=outbound)
+
+    def attach_forward(self, route_id, proof):
+        """Use an independently verified fixed SSH forward; exit wire stays exact.
+
+        No profile/node/host mutation. The old direct REALITY endpoint is kept
+        source-restricted, and REALITY still authenticates inside the SSH leg.
+        Only two approved fallback loopback ports are accepted.
+        """
+        before, plan, record = self._load(route_id)
+        require(route_id in ('at','gbpower') and plan['inputs']['mode']=='reality'
+                and 'applied' in record and not any(k in record for k in ('finished','rolled_back','rollback_intent')),
+                'Forward fallback lifecycle unavailable')
+        self._guard(before,plan,record);self._resources(before,plan,record);self._armed(record)
+        scope_proof(proof,before['route'],self.clock())
+        fresh(proof['timestamp'],self.clock(),record['applied'])
+        require(proof.get('sha256')==record['sha256'] and proof.get('entry')==p.ENTRY,'Forward proof candidate/source mismatch')
+        failed=proof['direct_failure'];tunnel=proof['tunnel']
+        require(failed.get('sha256')==record['sha256'] and failed.get('entry')==p.ENTRY
+                and failed.get('authenticated_direct_attempted') is True and failed.get('passed') is False,
+                'Actual direct failure required')
+        fresh(failed.get('timestamp'),self.clock(),record['applied'])
+        require(tunnel.get('listener_address')=='127.0.0.1' and tunnel.get('listener_port')=={'at':21445,'gbpower':21448}[route_id]
+                and tunnel.get('target_address')==before['route']['ip'] and tunnel.get('target_port')==plan['inputs']['backend_port']
+                and tunnel.get('ssh_server')==before['route']['ip'],'Forward endpoints escaped scope')
+        require(all(tunnel.get(k) is True for k in ('host_key_pinned','restricted_identity','fixed_target_verified',
+                    'persistent_service_verified','restart_recovery_verified','loopback_only')),'Fixed persistent forward not verified')
+        if 'forward_tunnel' in record:
+            require(record['forward_tunnel']==proof,'Cannot replace attached forward')
+        else:
+            record['forward_tunnel']=deepcopy(proof)
+            record.pop('backend_proof',None)
+            self._save(record)
+        return dict(id=route_id,forward_attached=True,exit_config_unchanged=True,backend_proof_still_required=True)
 
     def finish(self, route_id):
         before, plan, record = self._load(route_id)
@@ -762,7 +802,7 @@ class Coordinator:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    actions = ('prepare', 'export-candidate', 'accept-installed', 'accept-baseline', 'stage', 'apply', 'export-backend',
+    actions = ('prepare', 'export-candidate', 'accept-installed', 'accept-baseline', 'stage', 'apply', 'export-backend', 'attach-forward',
                'accept-backend', 'finish', 'status', 'rollback')
     parser.add_argument('action', choices=actions)
     parser.add_argument('--id', required=True, choices=tuple(model.TARGETS))
@@ -777,7 +817,7 @@ def main(argv=None):
         api, _query = adapter.create_client()
         worker = Coordinator(api, store, SystemdTimer())
         method = getattr(worker, args.action.replace('-', '_'))
-        result = method(args.id, json.load(sys.stdin)) if args.action in ('prepare', 'accept-installed', 'accept-baseline', 'accept-backend') else method(args.id)
+        result = method(args.id, json.load(sys.stdin)) if args.action in ('prepare', 'accept-installed', 'accept-baseline', 'accept-backend','attach-forward') else method(args.id)
         print(json.dumps(result))
 
 
