@@ -28,7 +28,7 @@ certificate verification are not disabled.
 
 Publish and verify the release before copying this directory and
 `ops/selfsteal-us3/panel_api.py` to the panel. Run the published helper under root.
-Only `--scope aeza-de3` exists: AEZA profile, Germany 3 inbound, port 18443. Four
+The initial scope is `--scope aeza-de3`: AEZA profile, Germany 3 inbound, port 18443. Four
 other inbounds must remain byte-for-byte equivalent as decoded JSON.
 
 1. `plan` saves the full private snapshot to
@@ -70,4 +70,36 @@ The next explicit scope, `aeza-remaining`, only adds the same field to the
 Poland-2, Netherlands-5 and Germany-4 public inbounds on this single entry.
 It preserves the successful canary and disabled legacy host. Completion requires
 four real protocol/fingerprint checks per route, expected foreign egress and
-running-application delay checks for each. This is a plan, not a batch result.
+running-application delay checks for each. All twelve checks passed, with
+positive live Mihomo delays (546/394/546 ms for PL2/NL5/DE4), matching egress,
+and temporary listeners removed. Its rollback timer/service were disarmed
+after accepted proof. Candidate hash:
+`a0c490f2805adc03ee13ae75f4e49b9b67d517758d82725e2efd9976d9d2ec79`.
+
+## Isolated six-node cohort
+
+`cohort_compat.py` leaves the shared G-CONFIG and five non-target consumers
+untouched. It plans a separate profile for the six specifically enumerated
+new-core Germany/Netherlands nodes. The clone preserves keys and configuration,
+except its inbound tag (including routing references) and `minClientVer`.
+Existing main/hidden-auto host UUIDs, wire settings and subscription rights
+are preserved. This section describes the workflow, not a deployment claim.
+
+1. `plan` captures private state and verifies exactly six nodes/twelve hosts.
+2. Pipe `export-candidate --secret-stdout` into an installed Xray 26.7.28 config
+   test. A same-version AEZA validation is a control, not SSH validation on each
+   target. `accept-installed` records the actual fresh result.
+3. `stage` arms an independent 900-second rollback before clone/rights creation.
+4. `apply` moves only the six node assignments and twelve host inbound links.
+5. `local_matrix.cjs` performs 24 real isolated HTTPS/egress checks and obtains
+   running-Mihomo delays, without switching or reloading the user's app.
+6. `subscription_readback.cjs` fetches the active subscription anew in Mihomo
+   and Happ formats, holding URL/credentials in RAM. Check all six main routes
+   and six Happ auto members against the existing wire credentials, then submit
+   its result to `accept-subscription`. It does not claim the separate Mihomo
+   automatic proxy is a local url-test group.
+7. `finish` requires both fresh subscription proof and all 24 traffic checks,
+   then disarms rollback. On failure `rollback` restores owned bindings/grants
+   while retaining the inactive clone and preserving unrelated permissions.
+
+Node helper tests: `node --test ops/pc-outage-20260918/test_local_helpers.cjs`.
