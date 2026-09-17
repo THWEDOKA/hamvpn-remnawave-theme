@@ -81,14 +81,32 @@ def probe():
     save('isolated-diagnostic-proof',{'timestamp':time.time(),'tests':tests})
 
 
+def nginx_test():
+    assert ENTRY + '/' in run('ip','-4','addr','show')
+    with socket.socket() as s: s.bind((ENTRY,8443))
+    with socket.create_connection((ENTRY,18443),timeout=2): pass
+    config = ('load_module /usr/lib/nginx/modules/ngx_stream_module.so;\n'
+        'pid '+str(STATE/'diagnostic-nginx.pid')+';\n'
+        'error_log '+str(STATE/'diagnostic-nginx.log')+';\n'
+        'events {}\nstream {server {listen '+ENTRY+':8443; ssl_preread on; proxy_pass '
+        +ENTRY+':18443; proxy_timeout 60s;}}\n')
+    path=STATE/'diagnostic-nginx.conf'
+    path.write_text(config);path.chmod(0o600)
+    run('nginx','-t','-c',str(path),'-p',str(STATE))
+    run('systemd-run','--unit='+UNIT+'-nginx','--property=RuntimeMaxSec=900',
+        '/usr/sbin/nginx','-c',str(path),'-p',str(STATE),'-g','daemon off;')
+    print('{"nginx_comparison_port":8443,"auto_stop_seconds":900}')
+
+
 def main():
     os.umask(0o077)
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['export','start','probe','stop'])
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['export','start','probe','stop','nginx-test'])
     parser.add_argument('--mss',type=int,choices=[0,1200],default=0)
     args=parser.parse_args();action=args.action
     if action=='export': print(json.dumps(payload(p.prior.create_client()[0])))
     elif action=='start': start(args.mss)
     elif action=='probe': probe()
+    elif action=='nginx-test': nginx_test()
     else:
         run('systemctl','stop',UNIT+'.service')
         for port in PORTS:
