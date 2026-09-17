@@ -221,10 +221,10 @@ async function versions(binaries, clients) {
 
 async function curl(binary, number, egress) {
   const args = ['--disable', '-4', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${number}`,
-    '-fsS', '--connect-timeout', '5', '--max-time', '14', '--max-filesize', '4096', '--proto', '=https'];
+    '-fsS', '--connect-timeout', '15', '--max-time', '30', '--max-filesize', '4096', '--proto', '=https'];
   if (egress) args.push('-w', '\n%{http_code}', EGRESS_URL);
   else args.push('-o', os.devNull, '-w', '%{http_code}', CHECK_URL);
-  const raw = await runFile(binary, args, 18000);
+  const raw = await runFile(binary, args, 35000);
   requireTrue(Number.isInteger(raw.code) && !raw.killed && !raw.signal, 'curl_process_did_not_complete');
   if (!egress) return {code: raw.code, status: /^\d{3}$/.test(raw.output.trim()) ? Number(raw.output.trim()) : 0};
   const parts = raw.output.trim().split(/\r?\n/);

@@ -191,6 +191,8 @@ test('mock child integration executes two curl responses, exact stdin wire, drai
   t.mock.method(cp, 'execFile', (binary, args, options, done) => {
     curlCalls.push(args); assert.equal(args[0], '--disable'); assert.equal(options.shell, false);
     assert(args.includes('--socks5-hostname')); assert(!args.includes('-k')); assert(!args.includes('-L'));
+    assert.equal(args[args.indexOf('--connect-timeout') + 1], '15');
+    assert.equal(args[args.indexOf('--max-time') + 1], '30'); assert.equal(options.timeout, 35000);
     setImmediate(() => done(null, args.at(-1).includes('ipify') ? '45.151.180.85\n200' : '204'));
   });
   const result = await m.measure(item, value.binaries, await fakeVersions());
