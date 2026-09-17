@@ -23,5 +23,14 @@ class CapacityTest(unittest.TestCase):
         self.assertNotIn('tcp_retries2', capacity.config_text())
         self.assertNotIn('tcp_fin_timeout', capacity.config_text())
 
+    def test_firewall_counters_not_policy_changes(self):
+        a = '# Generated at A\n*filter\n:INPUT ACCEPT [12:1200]\n-A INPUT -p tcp --dport 2222 -j HAM_TLS245\nCOMMIT'
+        b = a.replace('at A', 'at B').replace('[12:1200]', '[55:10000]')
+        self.assertEqual(capacity.firewall_policy(a), capacity.firewall_policy(b))
+
+    def test_real_firewall_changes_detected(self):
+        a = ':INPUT ACCEPT [12:1200]\n-A INPUT -p tcp --dport 2222 -j HAM_TLS245'
+        self.assertNotEqual(capacity.firewall_policy(a), capacity.firewall_policy(a.replace('2222', '22')))
+
 
 if __name__ == '__main__': unittest.main()

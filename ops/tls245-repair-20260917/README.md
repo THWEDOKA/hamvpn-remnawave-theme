@@ -26,15 +26,23 @@ and [Linux TCP sysctls](https://docs.kernel.org/networking/ip-sysctl.html).
 
 `diagnose.py` and `deep_inventory.py` are read-only, aggregate-only probes.
 `capacity.py apply` verifies exact host/runtime, saves root-only configuration
-and baseline snapshots to `/root/tls245-repair-20260917`, and writes only
-`/etc/sysctl.d/99-hamvpn-tls245-capacity.conf`. It loads only that file, never
+and baseline snapshots to `/root/tls245-repair-20260917/verified`, and writes only
+`/etc/sysctl.d/99-hamvpn-tls245-capacity.conf` and the scoped module-load file
+`/etc/modules-load.d/hamvpn-tls245-conntrack.conf`. The latter ensures conntrack
+exists before systemd-sysctl at boot. It loads only its own sysctl file, never
 global sysctl files. Existing connections/conntrack entries are not flushed.
 `capacity.py rollback` checks that the live settings and owned file still
 match this repair, then restores only these three values and removes only
-its own file. Use the same verified GitHub release for either action.
+its two owned files. Use the same verified GitHub release for either action.
 
 Publish and verify this directory on GitHub main before application. Preserve
 all existing REALITY keys, legacy TLS clients, certificates, subscription
 settings and squad membership. Re-test both protocols and actual public
 subscription, inspect kernel counter deltas, and remove the disposable probe
 account before claiming a verified result.
+
+An initial application automatically restored all three sysctls because the
+firewall guard treated changing built-in chain traffic counters as policy
+changes. Its protected records remain in the parent backup directory. The
+corrected guard ignores only comments and packet/byte counters, not rules;
+two regression tests cover both benign counters and a genuine port change.

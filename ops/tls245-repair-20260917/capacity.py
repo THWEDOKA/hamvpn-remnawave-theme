@@ -4,12 +4,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 
 IP = '196.251.107.245'
-STATE = Path('/root/tls245-repair-20260917')
+STATE = Path('/root/tls245-repair-20260917/verified')
 CONF = Path('/etc/sysctl.d/99-hamvpn-tls245-capacity.conf')
+MODULES = Path('/etc/modules-load.d/hamvpn-tls245-conntrack.conf')
+MODULE_TEXT = '# Load before systemd-sysctl so the persistent capacity applies.\nnf_conntrack\n'
 TARGET = {'net.netfilter.nf_conntrack_max': 262144,
           'net.ipv4.tcp_max_orphans': 32768,
           'net.ipv4.tcp_orphan_retries': 4}
@@ -48,10 +51,16 @@ def fingerprint():
              '/etc/nginx/sites-available/selfsteal-tls245',
              '/etc/letsencrypt/renewal/tls245.torcalc.ru.conf',
              '/etc/letsencrypt/renewal-hooks/deploy/hamvpn-tls245']
-    rules = '\n'.join(s for s in run('iptables-save').splitlines() if not s.startswith('#'))
+    rules = firewall_policy(run('iptables-save'))
     return {'files': {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in files},
             'started': run('docker', 'inspect', '-f', '{{.State.StartedAt}}', 'remnanode'),
             'firewall': hashlib.sha256(rules.encode()).hexdigest()}
+
+
+def firewall_policy(text):
+    # Built-in chain packet/byte counters change with live traffic, not policy.
+    return '\n'.join(re.sub(r'\[\d+:\d+\]', '[0:0]', s)
+                     for s in text.splitlines() if not s.startswith('#'))
 
 
 def identity():
@@ -67,22 +76,25 @@ def identity():
 def rollback():
     before = json.loads((STATE / 'before.json').read_text())
     assert CONF.read_text() == config_text(), 'Config modified since repair'
+    assert MODULES.read_text() == MODULE_TEXT, 'Module config modified since repair'
     assert values() == TARGET, 'Runtime modified since repair'
     # Restore runtime first; refuse to remove anything outside this exact file.
     for k, v in before['values'].items():
         run('sysctl', '-w', f'{k}={v}')
     CONF.unlink()
+    MODULES.unlink()
     save('rollback', {'time': time.time(), 'restored': values()})
     return {'rolled_back': values() == before['values']}
 
 
 def apply():
     assert not CONF.exists(), 'Existing config: inspect instead of overwrite'
+    assert not MODULES.exists(), 'Existing module config: inspect first'
     assert not (STATE / 'before.json').exists(), 'Existing repair intent: inspect first'
     mem = {s.split(':')[0]: int(s.split()[1]) for s in Path('/proc/meminfo').read_text().splitlines()}
     before = values()
     validate(before, mem['MemTotal'], mem['MemAvailable'])
-    STATE.mkdir(mode=0o700, exist_ok=True)
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     baseline = fingerprint()
     save('before', {'time': time.time(), 'values': before, 'fingerprint': baseline})
     # Narrow root-only snapshot before the only mutation; no secret output.
@@ -96,6 +108,8 @@ def apply():
     with CONF.open('x') as file: file.write(config_text())
     CONF.chmod(0o644)
     try:
+        with MODULES.open('x') as file: file.write(MODULE_TEXT)
+        MODULES.chmod(0o644)
         run('sysctl', '-p', str(CONF))
         assert values() == TARGET
         assert fingerprint() == baseline, 'Unrelated target service change'
@@ -103,6 +117,7 @@ def apply():
         # A partially applied sysctl load still restores only this invocation.
         for k, v in before.items(): run('sysctl', '-w', f'{k}={v}')
         if CONF.read_text() == config_text(): CONF.unlink()
+        if MODULES.exists() and MODULES.read_text() == MODULE_TEXT: MODULES.unlink()
         save('automatic-rollback', {'time': time.time(), 'restored': values()})
         raise
     proof = {'time': time.time(), 'before': before, 'after': values(),

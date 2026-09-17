@@ -41,7 +41,7 @@ def main():
         return stdout
     try:
         if args.action == 'deploy':
-            archive = subprocess.check_output(['git', 'archive', '--format=tar', revision, SCOPE], cwd=root)
+            archive = subprocess.check_output(['git', '-c', 'core.autocrlf=false', 'archive', '--format=tar', revision, SCOPE], cwd=root)
             digest = hashlib.sha256(archive).hexdigest()
             command('umask 077; mkdir -p /opt/tls245-repair-20260917; mkdir ' + release)
             with client.open_sftp() as sftp:
