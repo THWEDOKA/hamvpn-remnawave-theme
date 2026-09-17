@@ -90,7 +90,7 @@ const {test}=require('./ops/pc-outage-20260918/local_matrix.cjs');
 const yaml=require(require.resolve('yaml',{paths:['C:/Users/User/Documents/hamvpn/HamVPN-PC']}));
 const config=yaml.parse(fs.readFileSync('C:/Users/User/AppData/Roaming/hamvpn-pc/work/config.yaml','utf8'));
 const binary='C:/Program Files/HamVPN PC/resources/sidecar/mihomo.exe';
-const version=cp.execFileSync(binary,['-v'],{windowsHide:true,encoding:'utf8'}).match(/Mihomo\s+(\S+)/i)[1];
+const version=cp.execFileSync(binary,['-v'],{windowsHide:true,encoding:'utf8'}).match(/Mihomo(?:\s+Meta)?\s+(v?\d[^\s]*)/i)[1];
 const output=[];
 for(const item of r.external){const matches=config.proxies.filter(p=>p.server===r.ip&&p.port===item.port&&p.type==='hysteria2');
 if(matches.length!==1)throw Error('legacy selection');const proxy=matches[0];
