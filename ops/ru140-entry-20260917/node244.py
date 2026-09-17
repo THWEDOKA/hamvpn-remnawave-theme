@@ -268,7 +268,9 @@ def renew():
             require(answers == [ENTRY], 'Public DNS has not converged; no ACME request sent')
             require(not run('dig', '@' + resolver, domain, 'AAAA', '+short').strip(),
                     'Unexpected AAAA; no ACME request sent')
-    require('--no-random-sleep-on-renew' in run('certbot', '--help', 'all'), 'Installed certbot lacks no-random-sleep option')
+    # Certbot 2.9 accepts this hidden boolean flag but omits it from --help all.
+    # Parse it in a non-mutating command before requesting staging renewal.
+    run('certbot', '--no-random-sleep-on-renew', '--version')
     run('certbot', 'renew', '--cert-name', DOMAIN, '--dry-run', '--run-deploy-hooks', '--no-random-sleep-on-renew')
     run('systemctl', 'enable', '--now', 'certbot.timer')
     save('renewal', {'passed': True, 'timestamp': time.time()})
