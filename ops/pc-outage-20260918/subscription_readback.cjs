@@ -2,6 +2,28 @@
 // Input stdin: metadataPath, profilePath, yamlModuleRoot, sha256,
 // targets:[{id,address,port}]. No HWID is invented or device enrollment requested.
 const fs = require('fs');
+const cp = require('child_process');
+const crypto = require('crypto');
+const os = require('os');
+function deviceHeaders() {
+  // Match HamVPN-PC/src/main/utils/deviceInfo.ts exactly. Reuse the existing
+  // Windows device identity; never create a new test-device HWID/customer slot.
+  if (process.platform !== 'win32') throw Error('existing Windows control device required');
+  const readRegistry = (key, value) => {
+    const text = cp.execFileSync('reg.exe', ['query', key, '/v', value],
+      {encoding: 'utf8', windowsHide: true, timeout: 3000});
+    return text.match(new RegExp(value + '\\s+REG_SZ\\s+(.+)'))?.[1]?.trim() || '';
+  };
+  const raw = readRegistry('HKLM\\SOFTWARE\\Microsoft\\Cryptography', 'MachineGuid');
+  if (!raw) throw Error('existing device identity unavailable');
+  let version = '', product = '';
+  try { version = readRegistry('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', 'DisplayVersion'); } catch {}
+  try { product = readRegistry('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', 'ProductName'); } catch {}
+  if (Number(os.release().split('.').at(-1)) >= 22000) product = product.replace('Windows 10', 'Windows 11');
+  return {'x-hwid': crypto.createHash('sha256').update(raw).digest('hex').substring(0,16),
+    'x-device-os': 'Windows', 'x-ver-os': version || os.release(),
+    'x-device-model': product || `Windows ${os.release()}`};
+}
 function wire(p) {
   return {address: p.server, port: p.port, uuid: p.uuid, sni: p.servername,
     key: p['reality-opts']?.['public-key'], sid: p['reality-opts']?.['short-id'],
@@ -21,11 +43,11 @@ function equal(a, b) {
   const keys = Object.keys(a).sort();
   return JSON.stringify(keys) === JSON.stringify(Object.keys(b).sort()) && keys.every(k => a[k] === b[k]);
 }
-async function read(url, agent) {
+async function read(url, agent, headers) {
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw Error('invalid URL');
   const response = await fetch(url, {redirect: 'error', signal: AbortSignal.timeout(25000),
-    headers: {'User-Agent': agent}});
+    headers: {'User-Agent': agent, ...headers}});
   if (response.status !== 200) throw Error('subscription HTTP failure');
   return response.text();
 }
@@ -38,7 +60,8 @@ async function main() {
   const item = metadata.items.find(item => item.id === metadata.current);
   if (!item || item.type !== 'remote' || typeof item.url !== 'string') throw Error('remote active subscription required');
   const cached = yaml.parse(fs.readFileSync(request.profilePath, 'utf8'));
-  const [mihomoText, happText] = await Promise.all([read(item.url, 'mihomo/1.19.29'), read(item.url, 'Happ/5.7.0')]);
+  const headers = deviceHeaders();
+  const [mihomoText, happText] = await Promise.all([read(item.url, 'mihomo/1.19.29', headers), read(item.url, 'Happ/5.7.0', headers)]);
   const fresh = yaml.parse(mihomoText), happ = JSON.parse(happText);
   if (!Array.isArray(fresh.proxies) || !Array.isArray(happ)) throw Error('unexpected subscription formats');
   const auto = happ.filter(config => config.remarks === '⚡ Автовыбор Серверов');
