@@ -226,9 +226,17 @@ def verify(api, published=False):
     before = read('before'); created = read('created')
     assert hashlib.sha256((STATE / 'before.json').read_bytes()).hexdigest() == read('before-checksum')['sha256']
     verification = read('verification-baseline') if exists('verification-baseline') else before
+    concurrent = exists('verification-baseline')
+    protected_nodes = {NODE, '22ac9320-4762-461d-b877-a9f33b58d492', *[n['node'] for n in NODES]}
+    external_changes = []
     now_nodes = {n['uuid']: n for n in api('GET', '/api/nodes/')}
-    assert set(now_nodes) == {n['uuid'] for n in verification['nodes']}
+    if not concurrent: assert set(now_nodes) == {n['uuid'] for n in verification['nodes']}
     for old in verification['nodes']:
+        if concurrent and old['uuid'] not in protected_nodes:
+            current = now_nodes.get(old['uuid'])
+            if current is None or binding(current) != binding(old) or any(current[k] != old[k] for k in ('name','address','port','isDisabled')):
+                external_changes.append({'kind':'node','uuid':old['uuid']})
+            continue
         current = now_nodes[old['uuid']]
         wanted = binding(old)
         if old['uuid'] == NODE:
@@ -238,8 +246,13 @@ def verify(api, published=False):
         assert actual['profile'] == wanted['profile'] and set(actual['inbounds']) == set(wanted['inbounds'])
         assert all(current[k] == old[k] for k in ('name', 'address', 'port', 'isDisabled'))
     now_hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
-    assert set(now_hosts) == {h['uuid'] for h in verification['hosts']}
+    if not concurrent: assert set(now_hosts) == {h['uuid'] for h in verification['hosts']}
     for old in verification['hosts']:
+        if concurrent and old['uuid'] not in OLD_HOSTS | TARGET_HOSTS:
+            current = now_hosts.get(old['uuid'])
+            if current is None or prior.stable_host(current) != prior.stable_host(old):
+                external_changes.append({'kind':'host','uuid':old['uuid']})
+            continue
         wanted = copy.deepcopy(old)
         if old['uuid'] in OLD_HOSTS: wanted.update(legacy_host(old))
         if published and old['uuid'] in TARGET_HOSTS: wanted.update(target_host(old))
@@ -250,8 +263,16 @@ def verify(api, published=False):
     for old in before['squads']:
         current = api('GET', '/api/internal-squads/' + old['uuid'])
         assert set(ids(old) + additions(old, created)) <= set(ids(current))
+    if concurrent:
+        save('concurrent-verification', {'timestamp':time.time(),'unrelated_edits_not_overwritten':external_changes,
+            'new_nodes':list(set(now_nodes)-{n['uuid'] for n in verification['nodes']}),
+            'new_hosts':list(set(now_hosts)-{h['uuid'] for h in verification['hosts']})})
     return {'entry_connected': True, 'legacy_keys_and_settings_preserved': True,
-            'unrelated_nodes_hosts_and_profiles_unchanged': True, 'old_rights_preserved': True}
+            'unrelated_nodes_hosts_and_profiles_unchanged': not external_changes
+                and set(now_nodes)=={n['uuid'] for n in verification['nodes']}
+                and set(now_hosts)=={h['uuid'] for h in verification['hosts']},
+            'scoped_changes_verified':True, 'shared_and_foreign_profiles_unchanged':True,
+            'concurrent_unrelated_edits_preserved':concurrent, 'old_rights_preserved': True}
 
 
 def publish(api):

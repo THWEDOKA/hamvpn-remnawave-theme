@@ -164,9 +164,19 @@ def preserve_concurrent():
     return {'concurrent_unrelated_changes_preserved':True,'original_scope_and_rollback_unchanged':True}
 
 
+def complete_publication():
+    """Accept only an entirely applied eight-host change after uncertain response."""
+    assert exists('publish-intent') and not exists('published') and not exists('rollback')
+    proof=read('new-probes');assert proof['all_passed'] and 0 <= time.time()-proof['timestamp'] < 1800
+    api,_=p.prior.create_client()
+    result=p.verify(api,True)
+    save('published',{'timestamp':time.time(),**result})
+    return result
+
+
 if __name__=='__main__':
     os.umask(0o077)
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['prepare','stage','entry-check','entry-finish','sites','preserve_concurrent'])
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['prepare','stage','entry-check','entry-finish','sites','preserve_concurrent','complete_publication'])
     action=parser.parse_args().action
     result=entry_check(action=='entry-finish') if action.startswith('entry-') else globals()[action]()
     print(json.dumps(result))
