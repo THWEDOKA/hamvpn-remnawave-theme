@@ -204,7 +204,9 @@ def collect(api):
     for node_id in scope_nodes:
         pid, aids = active(nodes[node_id])
         require(aids <= set(indexed(profiles[pid]['inbounds'])), 'Active inbound absent from profile metadata')
-    consumers = {pid: sorted(n['uuid'] for n in nodes.values() if active(n)[0] == pid) for pid in pids}
+    consumers = {pid: sorted(n['uuid'] for n in nodes.values()
+                            if (n.get('configProfile') or {}).get('activeConfigProfileUuid') == pid)
+                 for pid in pids}
     relevant_nodes = scope_nodes | {uid for values in consumers.values() for uid in values}
     relevant_hosts = [h for h in hosts.values() if set(h.get('nodes', [])) & relevant_nodes or
                       (h.get('inbound') or {}).get('configProfileInboundUuid') in all_inbounds]

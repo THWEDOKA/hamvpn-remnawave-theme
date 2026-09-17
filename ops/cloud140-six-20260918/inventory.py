@@ -84,7 +84,7 @@ def panel_inventory(api):
                 rights.append(dict(pick(squad, ('uuid', 'name')), relevant_inbounds=matches,
                                    customer_name_hint=squad['name'] in ('BASE', 'WHITE', 'OLD', 'site')))
         consumers = [pick(n, ('uuid', 'name', 'address', 'isConnected', 'isDisabled')) for n in nodes
-                     if n['configProfile']['activeConfigProfileUuid'] == profile_id]
+                     if (n.get('configProfile') or {}).get('activeConfigProfileUuid') == profile_id]
         indirect_hosts = []
         for host in hosts:
             binding = host.get('inbound') or {}

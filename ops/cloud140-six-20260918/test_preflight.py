@@ -135,6 +135,11 @@ class SnapshotTests(unittest.TestCase):
         self.assertIn('other-consumer-host', p.indexed(before['hosts']))
         self.assertEqual(p.indexed(before['hosts'])[p.GB_BYPASS], self.f.hosts[p.GB_BYPASS])
 
+    def test_unconfigured_unrelated_node_is_ignored(self):
+        self.f.nodes['unconfigured'] = dict(uuid='unconfigured', configProfile=None)
+        self.f.snapshot()
+        self.assertNotIn('unconfigured', p.indexed(p.baseline(self.f.store)['nodes']))
+
     def test_second_snapshot_never_overwrites_or_calls_api(self):
         self.f.snapshot(); old = copy.deepcopy(self.f.store.data); self.f.calls.clear()
         with self.assertRaises(RuntimeError): self.f.snapshot()
