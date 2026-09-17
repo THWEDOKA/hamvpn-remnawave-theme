@@ -86,6 +86,11 @@ class Timers(c.SystemdTimer):
 
     def stop(self, name):
         require(name in (FRONT_TIMER, c.SystemdTimer.name(ID)), 'Unowned timer')
+        state = self.state(name + '.timer', allow_missing=True)
+        if state.get('LoadState') == 'not-found':
+            require(state.get('ActiveState') == 'inactive' and state.get('SubState') == 'dead',
+                    'Collected timer has unexpected state')
+            return
         result = self.run(['systemctl', 'stop', name + '.timer'], capture_output=True, text=True, timeout=30)
         require(result.returncode == 0, 'Timer stop failed')
 

@@ -515,6 +515,7 @@ class SystemdTests(unittest.TestCase):
         timer = f.Timers(runner)
         timer.inactive(f.FRONT_TIMER)
         timer.service_idle(f.FRONT_TIMER)
+        timer.stop(f.FRONT_TIMER)
 
     def test_frontend_start_uses_frontend_script_ten_minutes_and_no_shell(self):
         calls = []
