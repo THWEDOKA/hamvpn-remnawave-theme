@@ -1,0 +1,30 @@
+[
+  {
+    "id": "de182",
+    "ip": "217.60.68.182",
+    "country": "DE",
+    "name": "🇩🇪 Германия — 3",
+    "domain": "de182.torcalc.ru"
+  },
+  {
+    "id": "pl150",
+    "ip": "31.56.188.150",
+    "country": "PL",
+    "name": "🇵🇱 Польша — 2",
+    "domain": "pl150.torcalc.ru"
+  },
+  {
+    "id": "nl82",
+    "ip": "94.183.255.82",
+    "country": "NL",
+    "name": "🇳🇱 Нидерланды",
+    "domain": "nl82.torcalc.ru"
+  },
+  {
+    "id": "de94",
+    "ip": "62.60.226.94",
+    "country": "DE",
+    "name": "🇩🇪 Германия — 4",
+    "domain": "de94.torcalc.ru"
+  }
+]
