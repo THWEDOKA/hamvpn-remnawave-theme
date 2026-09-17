@@ -43,6 +43,9 @@ class PruningTests(unittest.TestCase):
         current = [c for c in configs if c['remarks'] not in EXTRA_HOSTS]
         before = {'hosts': baseline, 'subscription': configs}
         self.assertTrue(subscription_proof(before, current)['four_visible_hosts'])
+        reindexed = copy.deepcopy(current)
+        reindexed[-1]['outbounds'][0]['tag'] = 'basepool-8'
+        self.assertTrue(subscription_proof(before, reindexed)['vless_auto_pool_unchanged'])
         bad = copy.deepcopy(current)
         bad[-1]['outbounds'] = []
         with self.assertRaises(AssertionError):

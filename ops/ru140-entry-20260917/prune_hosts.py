@@ -88,7 +88,10 @@ def subscription_proof(before, current):
     old_auto = old_configs['⚡ Автовыбор Серверов']
     new_auto = new_configs['⚡ Автовыбор Серверов']
     def vless(config):
-        return [o for o in config['outbounds'] if o.get('protocol') == 'vless']
+        # The template regenerates ordinal basepool-N tags after removing entries.
+        # Compare connection settings, not their presentation/index-derived tag.
+        return [{k: v for k, v in o.items() if k != 'tag'}
+                for o in config['outbounds'] if o.get('protocol') == 'vless']
     assert vless(new_auto) == vless(old_auto), 'Existing VLESS auto pool changed'
     addresses = {h['address'] for h in before['hosts'] if h['uuid'] in EXTRA_HOSTS}
     for outbound in new_auto['outbounds']:
@@ -165,10 +168,18 @@ def apply(api):
         raise
 
 
+def retry(api):
+    assert (STATE / 'rollback.json').exists() and not (STATE / 'finished.json').exists()
+    verify(api, retired=False)
+    assert not (STATE / 'first-attempt.json').exists(), 'Retry already attempted; inspect state'
+    (STATE / 'intent.json').rename(STATE / 'first-attempt.json')
+    return apply(api)
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['snapshot', 'apply', 'verify', 'rollback'])
+    parser.add_argument('action', choices=['snapshot', 'apply', 'verify', 'rollback', 'retry'])
     args = parser.parse_args()
     api, _ = create_client()
     print(json.dumps(globals()[args.action](api), ensure_ascii=False))
