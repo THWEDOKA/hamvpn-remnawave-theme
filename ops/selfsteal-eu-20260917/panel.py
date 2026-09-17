@@ -184,21 +184,39 @@ def probe(api, n):
 
 def verify(api):
     before = read('before')
+    review = read('reviewed-concurrent') if exists('reviewed-concurrent') else {}
+    if review:
+        assert review['reviewed'] is True
+        assert review['snapshot_sha256'] == hashlib.sha256((STATE / 'before.json').read_bytes()).hexdigest()
+    missing_nodes = set(review.get('missing_nodes', []))
+    missing_hosts = set(review.get('missing_hosts', []))
     nodes = {n['uuid']: n for n in api('GET', '/api/nodes/')}
     hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
     for n in before['nodes']:
+        if n['uuid'] in missing_nodes:
+            assert n['uuid'] not in nodes, 'Reviewed deletion changed again'
+            continue
         now = nodes[n['uuid']]
         for k in ('name', 'address', 'port', 'isDisabled'): assert n[k] == now[k], 'Unrelated node changed'
         assert binding(n) == binding(now), 'Unrelated binding changed'
     for h in before['hosts']:
-        assert {k:v for k,v in h.items() if k != 'viewPosition'} == {k:v for k,v in hosts[h['uuid']].items() if k != 'viewPosition'}, 'Unrelated host changed'
+        if h['uuid'] in missing_hosts:
+            assert h['uuid'] not in hosts, 'Reviewed deletion changed again'
+            continue
+        expected = copy.deepcopy(h)
+        for key, change in review.get('host_changes', {}).get(h['uuid'], {}).items():
+            assert key == 'nodes' and expected[key] == change['before']
+            assert change['after'] == [] and set(change['before']) <= missing_nodes
+            expected[key] = change['after']
+        assert {k:v for k,v in expected.items() if k != 'viewPosition'} == {k:v for k,v in hosts[h['uuid']].items() if k != 'viewPosition'}, 'Unreviewed unrelated host change'
     assert api('GET', '/api/config-profiles/' + NORMAL_PROFILE)['config'] == before['normal']['config']
     created = [read(n['id'] + '-created') for n in NODES if exists(n['id'] + '-created')]
     for s in before['squads']:
         required = set(ids(s)) | {c['inbound'] for c in created if s['uuid'] in c['squads']}
         assert required <= set(ids(api('GET', '/api/internal-squads/' + s['uuid']))), 'Entitlement removed'
     for c in created: assert nodes[c['node']]['isConnected'] and not nodes[c['node']]['isDisabled']
-    return {'existing_nodes_preserved': len(before['nodes']), 'existing_hosts_preserved': len(before['hosts']),
+    return {'existing_nodes_preserved': len(before['nodes']) - len(missing_nodes), 'existing_hosts_preserved': len(before['hosts']) - len(missing_hosts),
+            'reviewed_external_node_deletions': len(missing_nodes), 'reviewed_external_host_deletions': len(missing_hosts),
             'new_nodes_connected': len(created), 'original_normal_profile_preserved': True}
 
 
