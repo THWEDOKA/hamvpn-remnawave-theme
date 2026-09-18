@@ -26,6 +26,13 @@ class Timer:
     def __init__(self):
         self.active, self.running = set(), set()
         self.starts, self.cancels = [], []
+        self.generation = 0
+
+    def select(self, value):
+        self.generation = c.generation({'generation': value})
+
+    def inactive(self, route_id):
+        c.require(route_id not in self.active and route_id not in self.running, 'Timer/service not inactive')
 
     def start(self, route_id):
         c.require(route_id not in self.active, 'Timer exists')
@@ -118,7 +125,9 @@ class CoordinatorTests(unittest.TestCase):
         self.api = API(self.fixture, self.store, self.timer, route_id)
         self.now = NOW
         self.worker = c.Coordinator(self.api, self.store, self.timer, self.baseline, lambda: self.now,
-            identity_factory=lambda: dict(privateKey=base64.urlsafe_b64encode(bytes(range(1, 33))).decode().rstrip('='), shortIds=['1234567890abcdef']))
+            identity_factory=lambda: dict(privateKey=base64.urlsafe_b64encode(bytes(range(1, 33))).decode().rstrip('='), shortIds=['1234567890abcdef']),
+            frontend_store_factory=lambda key: self.frontend_store)
+        self.frontend_store = Store()
 
     def inputs(self, route_id=None, mode='reality'):
         route = c.target(route_id or self.route_id)
@@ -197,7 +206,7 @@ class CoordinatorTests(unittest.TestCase):
         record=self.store.get('operation');route=c.target(self.route_id)
         return dict(id=self.route_id,node=route['node'],ip=route['ip'],timestamp=self.now,sha256=record['sha256'],entry=c.p.ENTRY,
                     direct_failure=dict(timestamp=self.now,sha256=record['sha256'],entry=c.p.ENTRY,authenticated_direct_attempted=True,passed=False),
-                    tunnel=dict(listener_address='127.0.0.1',listener_port={'at':21445,'gbpower':21448}[self.route_id],
+                    tunnel=dict(listener_address='127.0.0.1',listener_port=c.FORWARD_PORTS[self.route_id],
                     target_address=route['ip'],target_port=15444,ssh_server=route['ip'],host_key_pinned=True,restricted_identity=True,
                     fixed_target_verified=True,persistent_service_verified=True,restart_recovery_verified=True,loopback_only=True))
 
@@ -221,6 +230,207 @@ class CoordinatorTests(unittest.TestCase):
             proof=self.forward_proof();proof[part][key]=value
             with self.assertRaises(c.SafetyError):self.worker.attach_forward('at',proof)
         self.assertNotIn('forward_tunnel',self.store.get('operation'))
+
+    def finished_for_reopen(self, route_id='pl'):
+        self.init(route_id); self.apply()
+        self.worker.accept_backend(route_id, self.proof('backend'))
+        self.worker.finish(route_id)
+        self.now += 2
+        if route_id == 'cz':
+            record = self.store.get('operation')
+            before = dict(core=dict(candidate_sha256=record['sha256'], objects=deepcopy(record['objects']),
+                service_uuid=record['service_uuid']), hosts=[deepcopy(self.api.hosts[h['uuid']])
+                for h in self.store.get('before')['hosts']])
+            plan = dict(id=route_id, snapshot_sha256=c.checksum(before))
+            self.frontend_store.put('before', before); self.frontend_store.put('plan', plan)
+            self.frontend_store.put('operation', dict(id=route_id, rolled_back=self.now - 1,
+                snapshot_sha256=c.checksum(before), plan_sha256=c.checksum(plan), front='retired-cz-front'))
+        return self.store.get('operation')
+
+    def failure_for_reopen(self):
+        route = c.target(self.route_id)
+        return dict(**{k: route[k] for k in ('id', 'node', 'ip')}, timestamp=self.now,
+            sha256=self.store.get('operation')['sha256'], entry=c.p.ENTRY,
+            authenticated_direct_attempted=True, passed=False)
+
+    def reopened_backend_proof(self):
+        value = self.proof('backend')
+        exported = self.worker.export_backend(self.route_id)
+        value.update(transport_revision=exported['transport_revision'], outbound_sha256=exported['outbound_sha256'])
+        value['tests'][0]['transport'] = 'forward-ssh+reality'
+        return value
+
+    def test_reopen_pl_cz_preserves_config_identity_snapshots_and_archives_journal(self):
+        for route_id in ('pl', 'cz'):
+            old = self.finished_for_reopen(route_id)
+            before, plan = self.store.get('before'), self.store.get('plan')
+            nodes, profiles, hosts = deepcopy(self.api.nodes), deepcopy(self.api.profiles), deepcopy(self.api.hosts)
+            writes = len(self.api.writes)
+            result = self.worker.reopen_backend(route_id, self.failure_for_reopen())
+            self.assertTrue(result['reverification_open']); self.assertEqual(result['generation'], 1)
+            self.assertEqual(self.store.get('history-0'), old)
+            self.assertEqual(self.store.get('before'), before); self.assertEqual(self.store.get('plan'), plan)
+            current = self.store.get('operation')
+            self.assertNotIn('finished', current); self.assertNotIn('backend_proof', current)
+            for key in ('objects', 'service_uuid', 'sha256', 'metadata', 'desired_binding', 'baseline_proof'):
+                self.assertEqual(current[key], old[key])
+            self.assertEqual((self.api.nodes, self.api.profiles, self.api.hosts), (nodes, profiles, hosts))
+            self.assertEqual(len(self.api.writes), writes)
+            self.assertEqual(self.timer.generation, 1); self.assertIn(route_id, self.timer.active)
+            self.worker.attach_forward(route_id, self.forward_proof())
+            self.worker.accept_backend(route_id, self.reopened_backend_proof())
+            self.assertTrue(self.worker.finish(route_id)['backend_finished'])
+            self.assertEqual(len(self.api.writes), writes)
+
+    def test_reopen_never_resumes_at_rollback_or_unfinished_backend(self):
+        for route_id in ('at', 'gbpower', 'gb', 'us1'):
+            with self.assertRaises(c.SafetyError): self.worker.reopen_backend(route_id, {})
+        self.init('pl'); self.apply()
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.worker.rollback('pl')
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.assertNotIn('history-0', self.store.data)
+
+    def test_reopen_requires_fresh_failed_direct_exact_target_and_connected_clone(self):
+        changes = [lambda v: v.update(passed=True), lambda v: v.update(authenticated_direct_attempted=False),
+                   lambda v: v.update(timestamp=self.now + 1), lambda v: v.update(timestamp=self.now - 1801),
+                   lambda v: v.update(timestamp=NOW - 1), lambda v: v.update(sha256='0' * 64),
+                   lambda v: v.update(node='foreign'), lambda v: v.update(entry='1.1.1.1')]
+        for change in changes:
+            old = self.finished_for_reopen(); value = self.failure_for_reopen(); change(value)
+            with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', value)
+            self.assertEqual(self.store.get('operation'), old); self.assertNotIn('history-0', self.store.data)
+        self.finished_for_reopen()
+        self.api.nodes[c.target('pl')['node']]['isConnected'] = False
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+
+    def test_cz_rollback_missing_incomplete_changed_host_or_remaining_grant_blocks_reopen(self):
+        for case in ('missing', 'incomplete', 'finished', 'hash', 'host', 'grant'):
+            old = self.finished_for_reopen('cz'); front = self.frontend_store.data.get('operation')
+            if case == 'missing': self.frontend_store.data.clear()
+            if case == 'incomplete': front.pop('rolled_back')
+            if case == 'finished': front['finished'] = self.now
+            if case == 'hash': front['plan_sha256'] = '0' * 64
+            if case == 'host': self.api.hosts[c.target('cz')['host']]['port'] = 12345
+            if case == 'grant': next(iter(self.api.squads.values()))['inbounds'].append(dict(uuid='retired-cz-front'))
+            with self.assertRaises(c.SafetyError): self.worker.reopen_backend('cz', self.failure_for_reopen())
+            self.assertEqual(self.store.get('operation'), old)
+
+    def test_reopen_and_attach_refuse_live_service_consumer_even_without_publication(self):
+        old = self.finished_for_reopen('pl')
+        consumer = dict(protocol='vless', settings=dict(vnext=[dict(users=[dict(id=old['service_uuid'])])]))
+        self.api.profiles['entry-profile']['config']['outbounds'].append(consumer)
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.api.profiles['entry-profile']['config']['outbounds'].pop()
+        self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.api.profiles['entry-profile']['config']['outbounds'].append(consumer)
+        with self.assertRaises(c.SafetyError): self.worker.attach_forward('pl', self.forward_proof())
+        self.assertNotIn('forward_tunnel', self.store.get('operation'))
+
+    def test_reopen_archived_cz_requires_no_new_frontend_attempt(self):
+        self.finished_for_reopen('cz'); archive = self.frontend_store; self.frontend_store = Store()
+        value = self.failure_for_reopen(); value['frontend_archive'] = 'cz-' + 'a' * 20
+        with patch.object(c, 'archived_frontend_store', return_value=archive) as loader:
+            self.worker.reopen_backend('cz', value)
+            loader.assert_called_once_with('cz', value['frontend_archive'])
+            self.frontend_store.put('before', {'new-preparation': True})
+            with self.assertRaises(c.SafetyError): self.worker.attach_forward('cz', self.forward_proof())
+
+    def test_new_pl_frontend_prepare_blocks_transport_change(self):
+        old = self.finished_for_reopen('pl')
+        self.frontend_store.put('before', {'new-preparation': True})
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.assertEqual(self.store.get('operation'), old)
+
+    def test_reopen_requires_old_timer_and_service_inactive(self):
+        old = self.finished_for_reopen()
+        for collection in (self.timer.active, self.timer.running):
+            collection.add('pl')
+            with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+            self.assertEqual(self.store.get('operation'), old); collection.clear()
+
+    def test_reopen_uncertain_timer_never_recreated_and_only_readback_can_resume(self):
+        for created in (False, True):
+            self.finished_for_reopen(); failure = self.failure_for_reopen()
+            start = self.timer.start
+            def uncertain(route_id):
+                if created: start(route_id)
+                raise TimeoutError('fixture-lost-timer-result')
+            with patch.object(self.timer, 'start', side_effect=uncertain) as mocked:
+                with self.assertRaises(TimeoutError): self.worker.reopen_backend('pl', failure)
+                if created: self.worker.reopen_backend('pl', failure)
+                else:
+                    with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', failure)
+                self.assertEqual(mocked.call_count, 1)
+            self.assertEqual(self.store.get('operation')['generation'], 1)
+            changed = deepcopy(failure); changed['timestamp'] += 1; self.now += 1
+            with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', changed)
+
+    def test_reopen_old_journal_and_baseline_are_immutable(self):
+        self.finished_for_reopen(); self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.store.data['operation']['baseline_proof']['tests'][0]['passed'] = False
+        with self.assertRaises(c.SafetyError): self.worker.status('pl')
+        self.finished_for_reopen(); self.store.put('history-0', {'foreign': True})
+        with self.assertRaises(c.SafetyError): self.worker.reopen_backend('pl', self.failure_for_reopen())
+
+    def test_reopen_can_verify_unchanged_direct_without_attaching_any_tunnel(self):
+        self.finished_for_reopen(); self.worker.reopen_backend('pl', self.failure_for_reopen())
+        exported = self.worker.export_backend('pl')
+        self.assertEqual(exported['transport'], 'reality')
+        value = self.proof('backend')
+        value.update(transport_revision=exported['transport_revision'], outbound_sha256=exported['outbound_sha256'])
+        writes = len(self.api.writes)
+        self.worker.accept_backend('pl', value); self.worker.finish('pl')
+        self.assertNotIn('forward_tunnel', self.store.get('operation'))
+        self.assertEqual(writes, len(self.api.writes))
+
+    def test_reopened_proof_requires_exact_revision_wire_freshness_and_attached_transport(self):
+        self.finished_for_reopen(); old_proof = self.proof('backend')
+        self.worker.reopen_backend('pl', self.failure_for_reopen())
+        direct = self.proof('backend'); exported = self.worker.export_backend('pl')
+        direct.update(transport_revision=exported['transport_revision'], outbound_sha256=exported['outbound_sha256'])
+        self.worker.accept_backend('pl', direct)
+        self.now += 2; self.worker.attach_forward('pl', self.forward_proof())
+        self.assertNotIn('backend_proof', self.store.get('operation'))
+        with self.assertRaises(c.SafetyError): self.worker.accept_backend('pl', direct)
+        with self.assertRaises(c.SafetyError): self.worker.accept_backend('pl', old_proof)
+        changes = [lambda v: v.update(transport_revision=0), lambda v: v.update(outbound_sha256='0' * 64),
+            lambda v: v.update(timestamp=NOW), lambda v: v['tests'][0].update(transport='reality')]
+        for change in changes:
+            value = self.reopened_backend_proof(); change(value)
+            with self.assertRaises(c.SafetyError): self.worker.accept_backend('pl', value)
+            self.assertNotIn('backend_proof', self.store.get('operation'))
+        self.worker.accept_backend('pl', self.reopened_backend_proof()); self.worker.finish('pl')
+
+    def test_historical_original_baseline_not_refreshed_but_new_legacy_regression_fails(self):
+        old = self.finished_for_reopen(); self.now += 4000
+        self.worker.reopen_backend('pl', self.failure_for_reopen())
+        self.worker.attach_forward('pl', self.forward_proof())
+        value = self.reopened_backend_proof()
+        value['tests'][1].update(passed=False, authenticated=False, http_code=0, exit_ip=None, returncodes=[28, 28])
+        with self.assertRaises(c.SafetyError): self.worker.accept_backend('pl', value)
+        self.worker.accept_backend('pl', self.reopened_backend_proof()); self.worker.finish('pl')
+        self.assertEqual(self.store.get('operation')['baseline_proof'], old['baseline_proof'])
+
+    def test_generation_bound_rollback_skips_old_timer_and_new_timer_restores_original(self):
+        self.finished_for_reopen(); self.worker.reopen_backend('pl', self.failure_for_reopen())
+        writes = len(self.api.writes)
+        self.assertTrue(self.worker.rollback('pl', expected_generation=0)['stale_rollback_generation_skipped'])
+        self.assertEqual(len(self.api.writes), writes)
+        self.now += c.TTL + 1
+        with self.assertRaises(c.SafetyError): self.worker.attach_forward('pl', self.forward_proof())
+        self.worker.rollback('pl', expected_generation=1)
+        self.assertEqual(c.binding(self.api.nodes[c.target('pl')['node']]), c.binding(self.store.get('before')['node']))
+        self.assertIn('rolled_back', self.store.get('operation'))
+
+    def test_reopened_pl_cz_forward_rejects_cross_route_or_wrong_fixed_target(self):
+        for route_id in ('pl', 'cz'):
+            self.finished_for_reopen(route_id); self.worker.reopen_backend(route_id, self.failure_for_reopen())
+            for key, value in [('listener_port', 21448), ('target_port', 443), ('loopback_only', False),
+                               ('restart_recovery_verified', False), ('ssh_server', '1.1.1.1')]:
+                proof = self.forward_proof(); proof['tunnel'][key] = value
+                with self.assertRaises(c.SafetyError): self.worker.attach_forward(route_id, proof)
+            self.assertNotIn('forward_tunnel', self.store.get('operation'))
 
     def test_withdrawn_gb_us1_are_rejected_before_any_state_or_api_access(self):
         for route_id in ('gb', 'us1'):
@@ -664,6 +874,26 @@ class CoordinatorTests(unittest.TestCase):
 
 
 class SystemdTests(unittest.TestCase):
+    def test_reopened_timer_has_distinct_unit_and_explicit_generation_in_rollback_command(self):
+        calls, units = [], {}
+        def run(args, **kwargs):
+            calls.append(args)
+            if args[0] == 'systemd-run':
+                name = next(v.split('=', 1)[1] for v in args if v.startswith('--unit='))
+                units[name + '.timer'] = 'LoadState=loaded\nActiveState=active\nSubState=waiting\nResult=success\n'
+                units[name + '.service'] = 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\n'
+                return SimpleNamespace(returncode=0, stdout='')
+            value = units.get(args[2], 'LoadState=not-found\nActiveState=inactive\nSubState=dead\n')
+            return SimpleNamespace(returncode=0 if args[2] in units else 1, stdout=value)
+        timer = c.SystemdTimer(run); timer.select(1); timer.start('cz')
+        command = next(v for v in calls if v[0] == 'systemd-run')
+        self.assertIn('--unit=ham-cloud140-six-cz-exit-rollback-g1', command)
+        self.assertIn('--on-active=1500s', command)
+        self.assertEqual(command[command.index('--generation') + 1], '1')
+        self.assertEqual(command[-3:], ['rollback', '--id', 'cz'])
+        with self.assertRaises(c.SafetyError): timer.inactive('cz')
+        with self.assertRaises(c.SafetyError): timer.select(True)
+
     def test_both_service_and_timer_checked_before_create_and_after_cancel(self):
         calls, units = [], {}
         def run(args, **kwargs):
@@ -701,6 +931,40 @@ class SystemdTests(unittest.TestCase):
 
 
 class StoreTests(unittest.TestCase):
+    def archive_fixture(self):
+        route_id = 'cz'
+        values = dict(before={'core': 'fixture'}, plan={'id': route_id}, operation={'id': route_id, 'rolled_back': NOW})
+        token = route_id + '-' + c.checksum(values['operation'])[:20]
+        history, archived = Store(), Store()
+        history.path = c.STATE.parent / 'frontend-history'
+        for name, value in values.items(): archived.put(name, value)
+        history.put('retry-' + token, dict(id=route_id, source=str(c.STATE.parent / 'frontend' / route_id),
+            destination=str(history.path / token), records={name: c.checksum(value) for name, value in values.items()}))
+        history.put('done-' + token, dict(id=route_id, archived=True))
+        return token, history, archived
+
+    def test_completed_exact_main_front_retry_archive_is_read_by_hash(self):
+        token, history, archived = self.archive_fixture()
+        def store(path):
+            if path == history.path: return history
+            self.assertEqual(path, history.path / token)
+            return archived
+        with patch.object(c.p, 'Store', side_effect=store):
+            self.assertIs(c.archived_frontend_store('cz', token), archived)
+
+    def test_wrong_incomplete_or_modified_front_retry_archive_is_rejected(self):
+        for case in ('route', 'token', 'done', 'destination', 'source', 'content', 'hash'):
+            token, history, archived = self.archive_fixture()
+            route_id = 'pl' if case == 'route' else 'cz'
+            if case == 'token': token = '../cz-forged'
+            if case == 'done': history.data['done-' + token]['archived'] = False
+            if case == 'destination': history.data['retry-' + token]['destination'] = '/root/other'
+            if case == 'source': history.data['retry-' + token]['source'] = '/root/other'
+            if case == 'content': archived.data['operation']['rolled_back'] += 1
+            if case == 'hash': history.data['retry-' + token]['records']['plan'] = '0' * 64
+            with patch.object(c.p, 'Store', side_effect=lambda path: history if path == history.path else archived):
+                with self.assertRaises(c.SafetyError): c.archived_frontend_store(route_id, token)
+
     def test_only_mutable_operation_journal_can_be_replaced(self):
         for name in ('before', 'plan', '../operation', 'x'):
             with self.assertRaises(c.SafetyError): c.RootStore('at').save(name, {})

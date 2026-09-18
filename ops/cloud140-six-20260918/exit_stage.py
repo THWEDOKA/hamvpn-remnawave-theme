@@ -39,6 +39,20 @@ still succeed; pre-existing failures need no loss of any observed partial
 success (authentication/204/egress/zero returncode). The original legacy config
 is also preserved exactly by the model. Remaining old failures are reported,
 never called PASS. No empty/future/stale/cross-candidate proof can finalize.
+
+Explicit reopen-backend (PL/CZ only, JSON stdin) takes a scoped fresh failed
+direct proof {id,node,ip,sha256,entry,timestamp,authenticated_direct_attempted:true,
+passed:false}. CZ additionally needs a fully rolled-back frontend, either still
+in frontend/cz or frontend_archive:'cz-<20 hash chars>' from a COMPLETED
+front_retry archive. No caller-supplied boolean replaces that protected state.
+Old journals are immutable history-N; original before/plan and exit config/UUID
+never change. A new generation-bound 25-minute timer uses the original-binding
+rollback. Reverification may keep direct; OPTIONAL attach-forward requires the
+fixed 21446/21447 SSH endpoints and invalidates any earlier direct proof.
+New backend proofs must include transport_revision and outbound_sha256 from
+the actual exported/measured outbound. An attached forward also requires
+transport:'forward-ssh+reality' on the backend test. All legacy tests still compare against the ORIGINAL baseline;
+that historical baseline is not overwritten or represented as a fresh probe.
 """
 
 import argparse
@@ -68,6 +82,7 @@ MAX_PROOF_AGE = 1800
 # User narrowed the deployment scope; retained IDs support inspection/rollback
 # only if a prior operation exists. The main coordinator owns retirement.
 ACTIVE_ROUTES = frozenset(('at', 'pl', 'cz', 'gbpower'))
+FORWARD_PORTS = {'at': 21445, 'pl': 21446, 'cz': 21447, 'gbpower': 21448}
 
 
 class SafetyError(RuntimeError):
@@ -80,6 +95,38 @@ def require(value, message):
 
 
 checksum = p.digest
+
+
+def generation(record):
+    value = record.get('generation', 0)
+    require(type(value) is int and 0 <= value <= 99, 'Invalid operation generation')
+    return value
+
+
+def archive_journal(store, record):
+    name = 'history-' + str(generation(record))
+    if store.exists(name):
+        require(store.get(name) == record, 'Immutable previous journal differs')
+    else:
+        store.put(name, record)
+    return name
+
+
+def archived_frontend_store(route_id, token):
+    """Read only an exact, completed archive made by main's front_retry.py."""
+    require(isinstance(token, str) and re.fullmatch(re.escape(route_id) + r'-[a-f0-9]{20}', token),
+            'Exact frontend archive token required')
+    history = p.Store(STATE.parent / 'frontend-history')
+    intent, done = history.get('retry-' + token), history.get('done-' + token)
+    destination = history.path / token
+    require(intent.get('id') == done.get('id') == route_id and done.get('archived') is True
+            and intent.get('source') == str(STATE.parent / 'frontend' / route_id)
+            and intent.get('destination') == str(destination), 'Frontend archive completion/scope mismatch')
+    store = p.Store(destination)
+    values = {name: store.get(name) for name in ('before', 'plan', 'operation')}
+    require(intent.get('records') == {name: checksum(value) for name, value in values.items()}
+            and token == route_id + '-' + checksum(values['operation'])[:20], 'Frontend archive hashes differ')
+    return store
 
 
 def target(route_id):
@@ -236,10 +283,26 @@ class RootStore(p.Store):
 class SystemdTimer:
     def __init__(self, runner=subprocess.run):
         self.run = runner
+        self.generation = 0
+
+    def select(self, number):
+        self.generation = generation({'generation': number})
+
+    def suffix(self):
+        return '-g' + str(self.generation) if self.generation else ''
+
+    def rollback_args(self):
+        return ['--generation', str(self.generation)]
 
     def name(self, route_id):
         target(route_id)
-        return 'ham-cloud140-six-' + route_id + '-exit-rollback'
+        return 'ham-cloud140-six-' + route_id + '-exit-rollback' + self.suffix()
+
+    def inactive(self, route_id):
+        for suffix in ('.timer', '.service'):
+            state = self.state(self.name(route_id) + suffix, True)
+            require(state['ActiveState'] == 'inactive' and state['SubState'] == 'dead'
+                    and state['LoadState'] in ('loaded', 'not-found'), 'Prior rollback is not inactive')
 
     def state(self, unit, allow_missing=False):
         result = self.run(['systemctl', 'show', unit, '-p', 'LoadState', '-p', 'ActiveState',
@@ -259,7 +322,7 @@ class SystemdTimer:
                     and state['SubState'] == 'dead', 'Existing rollback unit must not be replaced')
         result = self.run(['systemd-run', '--unit=' + name, '--on-active=' + str(TTL) + 's',
                            '--timer-property=AccuracySec=1s', '--property=UMask=0077',
-                           sys.executable, str(Path(__file__).resolve()), 'rollback', '--id', route_id],
+                           sys.executable, str(Path(__file__).resolve())] + self.rollback_args() + ['rollback', '--id', route_id],
                           capture_output=True, text=True, timeout=30)
         require(result.returncode == 0, 'Timer creation uncertain; inspect without blind retry')
         self.armed(route_id)
@@ -284,10 +347,12 @@ class SystemdTimer:
 
 
 class Coordinator:
-    def __init__(self, api, store, timer, baseline_store=None, clock=time.time, identity_factory=new_identity):
+    def __init__(self, api, store, timer, baseline_store=None, clock=time.time, identity_factory=new_identity,
+                 frontend_store_factory=None):
         self.api, self.store, self.timer = api, store, timer
         self.baseline_store = baseline_store or p.Store()
         self.clock, self.identity_factory = clock, identity_factory
+        self.frontend_store_factory = frontend_store_factory or (lambda key: p.Store(STATE.parent / 'frontend' / key))
 
     def _save(self, record):
         self.store.save('operation', record)
@@ -303,6 +368,15 @@ class Coordinator:
             mode=inputs['mode'], identity=plan['identity'], server_names=inputs.get('server_names'),
             target=inputs.get('target'), direct_tag=inputs.get('direct_tag'))
         require(config == plan['candidate'] and checksum(config) == record['sha256'], 'Candidate/model drift')
+        self.timer.select(generation(record))
+        if 'reopen_intent' in record:
+            previous = self.store.get(record['previous_journal'])
+            require(generation(record) == generation(previous) + 1 and 'finished' in previous
+                    and record['baseline_anchor'] == previous['finished']
+                    and all(record[k] == previous[k] for k in ('snapshot_sha256', 'plan_sha256', 'sha256',
+                        'objects', 'service_uuid', 'metadata', 'backend', 'baseline_proof', 'desired_binding',
+                        'intents', 'rights', 'host_intents', 'applied', 'apply_intent')),
+                    'Reopened backend changed its original config, identity or baseline')
         return before, plan, record
 
     @staticmethod
@@ -310,7 +384,8 @@ class Coordinator:
         return dict(id=record['id'], candidate_sha256=record['sha256'], staged='staged' in record,
                     binding_applied='applied' in record and 'rolled_back' not in record,
                     rolled_back='rolled_back' in record, backend_finished='finished' in record,
-                    frontend_published=False)
+                    frontend_published=False, generation=generation(record),
+                    reverification_open='reopen_intent' in record and 'finished' not in record and 'rolled_back' not in record)
 
     def prepare(self, route_id, inputs):
         require(route_id in ACTIVE_ROUTES, 'Route withdrawn from current deployment scope')
@@ -370,11 +445,12 @@ class Coordinator:
         return deepcopy(self._load(route_id)[1]['candidate'])
 
     def _proof(self, proof, before, plan, record, kind):
-        scope_proof(proof, before['route'], self.clock())
+        now = record.get('baseline_anchor', self.clock()) if kind == 'baseline' else self.clock()
+        scope_proof(proof, before['route'], now)
         require(proof.get('sha256') == record['sha256'], 'Proof candidate mismatch')
         minimum = plan['prepared_at'] if kind == 'installed' else (
             before['preflight_timestamp'] if kind == 'baseline' else record['applied'])
-        fresh(proof.get('timestamp'), self.clock(), minimum)
+        fresh(proof.get('timestamp'), now, minimum)
         tests = proof.get('tests')
         require(isinstance(tests, list) and bool(tests) and all(isinstance(t, dict) for t in tests), 'No actual proof tests')
         if kind == 'installed':
@@ -390,6 +466,12 @@ class Coordinator:
                 self._legacy_test(test, plan)
         else:
             require(proof.get('entry') == p.ENTRY and proof.get('mode') == plan['inputs']['mode'], 'Backend proof source/transport mismatch')
+            if 'reopen_intent' in record:
+                fresh(proof['timestamp'], self.clock(), record['reopen_intent'])
+                exported = self.export_backend(record['id'])
+                require(proof.get('transport_revision') == generation(record)
+                        and proof.get('outbound_sha256') == exported['outbound_sha256'],
+                        'Backend proof belongs to a different transport revision')
             if 'forward_tunnel' in record:
                 fresh(proof['timestamp'],self.clock(),record['forward_tunnel']['timestamp'])
             backend = [t for t in tests if t.get('kind') == 'backend']
@@ -686,29 +768,105 @@ class Coordinator:
             address, port = '127.0.0.1', inputs['tunnel']['listener_port']
         outbound = dict(protocol='vless', settings=dict(vnext=[dict(address=address, port=port, users=[user])]), streamSettings=stream)
         return dict(id=route_id, sha256=record['sha256'], expected_egress=inputs['expected_egress'], mode=inputs['mode'],
-                    transport='forward-ssh+reality' if 'forward_tunnel' in record else inputs['mode'], outbound=outbound)
+                    transport='forward-ssh+reality' if 'forward_tunnel' in record else inputs['mode'], outbound=outbound,
+                    transport_revision=generation(record), outbound_sha256=checksum(outbound))
+
+    def _no_frontend_consumer(self, route_id, record, rollback_required=False, archive=None):
+        store = self.frontend_store_factory(route_id)
+        if archive:
+            require(not any(store.exists(name) for name in ('operation', 'before', 'plan')),
+                    'New frontend attempt exists; do not revise its backend')
+            store = archived_frontend_store(route_id, archive)
+        if store.exists('operation'):
+            front = store.get('operation')
+            before, plan = store.get('before'), store.get('plan')
+            require(front.get('id') == plan.get('id') == route_id and 'rolled_back' in front
+                    and 'finished' not in front and front.get('snapshot_sha256') == plan.get('snapshot_sha256') == checksum(before)
+                    and front.get('plan_sha256') == checksum(plan), 'Frontend must be explicitly and fully rolled back')
+            expected = before['core']
+            require(expected['candidate_sha256'] == record['sha256'] and expected['objects'] == record['objects']
+                    and expected['service_uuid'] == record['service_uuid'], 'Frontend rollback belongs to another backend')
+            for old in before['hosts']:
+                require(stable_host(self.api('GET', '/api/hosts/' + old['uuid'])) == stable_host(old),
+                        'Frontend host restoration is incomplete')
+            front_id = front.get('front')
+            require(not front_id or all(front_id not in ids(s['inbounds']) for s in
+                    self.api('GET', '/api/internal-squads/')['internalSquads']), 'Frontend grants remain after rollback')
+        else:
+            require(not rollback_required and not store.exists('before') and not store.exists('plan'),
+                    'Missing or incomplete frontend rollback history')
+        active_profiles = {binding(n)['profile'] for n in self.api('GET', '/api/nodes/')}
+        for pid in active_profiles - {None, record['objects']['profile']}:
+            config = self.api('GET', '/api/config-profiles/' + pid)['config']
+            require(not any(u.get('id') == record['service_uuid'] for out in config.get('outbounds', [])
+                    for hop in out.get('settings', {}).get('vnext', []) for u in hop.get('users', [])),
+                    'Live frontend consumes backend; roll it back first')
+
+    def reopen_backend(self, route_id, failure):
+        """Explicit PL/CZ direct re-verification; fixed forward stays optional.
+
+        Immutable original before/plan/clone/UUID remain authoritative. The new
+        timer uses the normal guarded original-binding rollback, not a new base.
+        A failed/uncertain timer start may only be resolved by armed() readback.
+        """
+        require(route_id in ('pl', 'cz'), 'Only finished PL/CZ backends may be reopened')
+        before, plan, record = self._load(route_id)
+        require(plan['inputs']['mode'] == 'reality' and 'applied' in record
+                and not any(k in record for k in ('rolled_back', 'rollback_intent', 'forward_tunnel')),
+                'Reopen requires the unchanged applied direct backend')
+        node, _ = self._guard(before, plan, record)
+        require(node['isConnected'] and binding(node) == record['desired_binding'], 'Reopen needs the connected existing clone')
+        self._resources(before, plan, record)
+        self._no_frontend_consumer(route_id, record, rollback_required=route_id == 'cz',
+                                  archive=failure.get('frontend_archive'))
+        scope_proof(failure, before['route'], self.clock())
+        require(failure.get('sha256') == record['sha256'] and failure.get('entry') == p.ENTRY
+                and failure.get('authenticated_direct_attempted') is True and failure.get('passed') is False,
+                'Fresh actual authenticated direct failure required')
+        if 'reopen_intent' in record and 'finished' not in record:
+            require(failure == record['reopen_failure'], 'Cannot replace an uncertain reopen intent')
+            self._armed(record)
+            return self.summary(record)
+        require('finished' in record, 'Reopen requires a finished backend, not a rolled-back candidate')
+        fresh(failure['timestamp'], self.clock(), record['finished'])
+        self.timer.inactive(route_id)
+        previous_name = archive_journal(self.store, record)
+        number = generation(record) + 1
+        anchor = record['finished']
+        for key in ('finished', 'backend_proof', 'arm_intent'):
+            record.pop(key, None)
+        record.update(generation=number, previous_journal=previous_name, baseline_anchor=anchor,
+                      reopen_intent=self.clock(), reopen_failure=deepcopy(failure), arm_intent=self.clock())
+        self._save(record)  # Intent before a new timer; never recreate after an uncertain start.
+        self.timer.select(number)
+        self.timer.start(route_id)
+        self._armed(record)
+        return self.summary(record)
 
     def attach_forward(self, route_id, proof):
         """Use an independently verified fixed SSH forward; exit wire stays exact.
 
         No profile/node/host mutation. The old direct REALITY endpoint is kept
         source-restricted, and REALITY still authenticates inside the SSH leg.
-        Only two approved fallback loopback ports are accepted.
+        Only the four approved per-route fallback loopback ports are accepted.
         """
         before, plan, record = self._load(route_id)
-        require(route_id in ('at','gbpower') and plan['inputs']['mode']=='reality'
+        require(route_id in FORWARD_PORTS and plan['inputs']['mode']=='reality'
                 and 'applied' in record and not any(k in record for k in ('finished','rolled_back','rollback_intent')),
                 'Forward fallback lifecycle unavailable')
         self._guard(before,plan,record);self._resources(before,plan,record);self._armed(record)
+        self._no_frontend_consumer(route_id, record, rollback_required='reopen_intent' in record and route_id == 'cz',
+                                  archive=record.get('reopen_failure', {}).get('frontend_archive'))
         scope_proof(proof,before['route'],self.clock())
-        fresh(proof['timestamp'],self.clock(),record['applied'])
+        minimum = max(record['applied'], record.get('reopen_intent', 0))
+        fresh(proof['timestamp'],self.clock(),minimum)
         require(proof.get('sha256')==record['sha256'] and proof.get('entry')==p.ENTRY,'Forward proof candidate/source mismatch')
         failed=proof['direct_failure'];tunnel=proof['tunnel']
         require(failed.get('sha256')==record['sha256'] and failed.get('entry')==p.ENTRY
                 and failed.get('authenticated_direct_attempted') is True and failed.get('passed') is False,
                 'Actual direct failure required')
-        fresh(failed.get('timestamp'),self.clock(),record['applied'])
-        require(tunnel.get('listener_address')=='127.0.0.1' and tunnel.get('listener_port')=={'at':21445,'gbpower':21448}[route_id]
+        fresh(failed.get('timestamp'),self.clock(),minimum)
+        require(tunnel.get('listener_address')=='127.0.0.1' and tunnel.get('listener_port')==FORWARD_PORTS[route_id]
                 and tunnel.get('target_address')==before['route']['ip'] and tunnel.get('target_port')==plan['inputs']['backend_port']
                 and tunnel.get('ssh_server')==before['route']['ip'],'Forward endpoints escaped scope')
         require(all(tunnel.get(k) is True for k in ('host_key_pinned','restricted_identity','fixed_target_verified',
@@ -747,8 +905,10 @@ class Coordinator:
             self._resources(before, plan, record)
         return dict(**self.summary(record), node_connected=node['isConnected'])
 
-    def rollback(self, route_id):
+    def rollback(self, route_id, expected_generation=None):
         before, plan, record = self._load(route_id)
+        if expected_generation is not None and expected_generation != generation(record):
+            return dict(id=route_id, stale_rollback_generation_skipped=True)
         if 'finished' in record:
             return dict(id=route_id, rollback_skipped_finished=True)
         node, hosts = self._guard(before, plan, record)
@@ -802,22 +962,31 @@ class Coordinator:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    actions = ('prepare', 'export-candidate', 'accept-installed', 'accept-baseline', 'stage', 'apply', 'export-backend', 'attach-forward',
+    actions = ('prepare', 'export-candidate', 'accept-installed', 'accept-baseline', 'stage', 'apply', 'export-backend', 'attach-forward', 'reopen-backend',
                'accept-backend', 'finish', 'status', 'rollback')
     parser.add_argument('action', choices=actions)
     parser.add_argument('--id', required=True, choices=tuple(model.TARGETS))
     parser.add_argument('--secret-stdout', action='store_true')
+    parser.add_argument('--generation', type=int, help='Rollback timer generation only; manual rollback defaults to current')
     args = parser.parse_args(argv)
+    require(args.generation is None or args.action == 'rollback' and 0 <= args.generation <= 99,
+            'Generation is only valid for rollback')
     exports = args.action in ('export-candidate', 'export-backend')
     require(args.secret_stdout == exports and (not exports or not sys.stdout.isatty()), 'Explicit private export pipe required')
     os.umask(0o077)
     store = RootStore(args.id)
-    with store.locked():
+    from contextlib import nullcontext
+    # Same global lock as frontend_stage: no prepare/stage races with a transport change.
+    consumer_lock = RootStore(args.id, STATE.parent / 'frontend') if args.action in ('reopen-backend', 'attach-forward') else None
+    with consumer_lock.locked() if consumer_lock else nullcontext(), store.locked():
         adapter = p.load_file('six_exit_panel_api', p.ROOT.parent / 'selfsteal-us3' / 'panel_api.py')
         api, _query = adapter.create_client()
         worker = Coordinator(api, store, SystemdTimer())
         method = getattr(worker, args.action.replace('-', '_'))
-        result = method(args.id, json.load(sys.stdin)) if args.action in ('prepare', 'accept-installed', 'accept-baseline', 'accept-backend','attach-forward') else method(args.id)
+        if args.action == 'rollback':
+            result = method(args.id, expected_generation=args.generation)
+        else:
+            result = method(args.id, json.load(sys.stdin)) if args.action in ('prepare', 'accept-installed', 'accept-baseline', 'accept-backend','attach-forward','reopen-backend') else method(args.id)
         print(json.dumps(result))
 
 
