@@ -175,9 +175,26 @@ def store_proof():
     save('backend-proof', proof); return {'backend_proof_saved': True}
 
 
+def mihomo_subscription():
+    api, _ = create_client(); user = read('probe')
+    sub = api('GET', '/api/subscriptions/by-uuid/' + user['uuid'])
+    req = urllib.request.Request(sub['subscriptionUrl'], headers={'User-Agent': 'mihomo/1.19.29',
+          'X-Hwid': 'ham-auto-mws-owned-probe', 'X-Device-Os': 'Windows',
+          'X-Device-Model': 'Deployment probe', 'X-Ver-Os': '11'})
+    with urllib.request.urlopen(req, timeout=30) as r: raw = r.read()
+    save('mihomo-subscription', {'raw': raw.decode('utf-8'),
+         'sha256': hashlib.sha256(raw).hexdigest(), 'time': time.time()})
+    return {'actual_mihomo_subscription_saved_privately': True}
+
+
 def finish():
     api, query = create_client(); proof = json.load(sys.stdin)
-    require(proof.get('passed') and proof['wire_sha256'] == sha(read('subscription-wire')), 'Actual auto client proof required')
+    if proof.get('client') == 'mihomo':
+        require(proof.get('passed') and proof['subscription_sha256'] == read('mihomo-subscription')['sha256']
+                and 0 <= time.time() - read('mihomo-subscription')['time'] < 900,
+                'Fresh actual mihomo subscription proof required')
+    else:
+        require(proof.get('passed') and proof['wire_sha256'] == sha(read('subscription-wire')), 'Actual auto client proof required')
     require(api('GET', '/api/config-profiles/' + AUTO)['config'] == read('auto-candidate'), 'Auto drift')
     require(api('GET', '/api/config-profiles/' + MWS)['config'] == read('plan')['mws'], 'MWS drift')
     require(api('GET', '/api/hosts/') == read('before')['hosts'], 'Client hosts changed')
@@ -232,7 +249,7 @@ if __name__ == '__main__':
     try:
         require(os.geteuid() == 0, 'Root required')
         p = argparse.ArgumentParser(); p.add_argument('action', choices=['prepare', 'arm', 'stage', 'apply',
-            'create_probe', 'subscriptions', 'store_proof', 'finish', 'rollback']); a = p.parse_args()
+            'create_probe', 'subscriptions', 'mihomo_subscription', 'store_proof', 'finish', 'rollback']); a = p.parse_args()
         print(json.dumps(globals()[a.action]()))
     except Exception as e:
         print(json.dumps({'failed': True, 'type': type(e).__name__,
