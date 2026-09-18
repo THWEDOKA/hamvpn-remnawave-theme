@@ -85,7 +85,14 @@ def guard(role):
     require(os.geteuid() == 0, 'Root required')
     os.umask(0o077)
     if role in TARGETS:
-        require((TARGETS[role]['ip'] + '/').encode() in run('ip', '-4', 'addr', 'show'), 'Wrong server')
+        addresses = run('ip', '-4', 'addr', 'show')
+        if role == 'entry':
+            # MWS has provider NAT: management/egress .244, local NIC 10.1.7.10.
+            fingerprint = run('ssh-keygen', '-lf', '/etc/ssh/ssh_host_ed25519_key.pub')
+            require(b'SHA256:ZLrj/W4UPr4CePOU9xa3vUiUalcnhKcyoffE33fxKbI' in fingerprint
+                    and b'10.1.7.10/' in addresses, 'Wrong NAT entry identity')
+        else:
+            require((TARGETS[role]['ip'] + '/').encode() in addresses, 'Wrong server')
 
 
 def api_client():
