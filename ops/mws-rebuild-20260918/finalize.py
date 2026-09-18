@@ -93,14 +93,20 @@ def cleanup():
         require(not any(OLD_NODE in h['nodes'] for h in api('GET','/api/hosts/')),'Old node still has hosts')
         save('delete-old-node-intent',{'uuid':OLD_NODE,'time':time.time()})
         api('DELETE','/api/nodes/'+OLD_NODE)
-    require(not any(n['uuid']==OLD_NODE for n in api('GET','/api/nodes/')),'Old node still present')
+    for _ in range(10):
+        if not any(n['uuid']==OLD_NODE for n in api('GET','/api/nodes/')):break
+        time.sleep(1)
+    else:raise RuntimeError('Old node still present; inspect async deletion before retry')
     profiles=api('GET','/api/config-profiles/')['configProfiles']
     if any(p['uuid']==OLD_PROFILE for p in profiles):
         require(api('GET','/api/config-profiles/'+OLD_PROFILE)['config']==before['profile']['config'],'Old profile drift')
         require(not any((n.get('configProfile') or {}).get('activeConfigProfileUuid')==OLD_PROFILE for n in api('GET','/api/nodes/')),'Old profile still used')
         require(not any((h.get('inbound') or {}).get('configProfileUuid')==OLD_PROFILE for h in api('GET','/api/hosts/')),'Old inbound still published')
         save('delete-old-profile-intent',{'uuid':OLD_PROFILE,'time':time.time()});api('DELETE','/api/config-profiles/'+OLD_PROFILE)
-    require(not any(p['uuid']==OLD_PROFILE for p in api('GET','/api/config-profiles/')['configProfiles']),'Old profile still present')
+    for _ in range(10):
+        if not any(p['uuid']==OLD_PROFILE for p in api('GET','/api/config-profiles/')['configProfiles']):break
+        time.sleep(1)
+    else:raise RuntimeError('Old profile still present; inspect async deletion before retry')
     save('cleanup-old',{'old_node_removed':True,'old_profile_removed':True,'old_host_replaced_in_place':True,'time':time.time()})
     return read('cleanup-old')
 
