@@ -208,9 +208,25 @@ def retry(role):
     return {'retry_prepared':True,'prior_attempt_retained':True,'role':role}
 
 
+def alternate_port():
+    guard('panel');api=api_client();saved=read('cutover-panel');created=read('created')
+    require(timer_status()['timer']['ActiveState']=='active','Rollback required')
+    require(not (STATE/'published-intent.json').exists(),'Cannot change an already published endpoint')
+    require(api('GET','/api/config-profiles/'+created['profile'])['config']==saved['config'],'Final profile drift')
+    require(saved['config']['inbounds'][0]['port']==443,'Unexpected previous port')
+    save('cutover-port443-before',saved)
+    saved['config']['inbounds'][0]['port']=18443;saved['wanted_host']['port']=18443
+    saved['config_sha256']=digest(json.dumps(saved['config'],sort_keys=True).encode())
+    save('cutover-panel',saved)
+    front=read('final-probe-input');front['outbound']['settings']['vnext'][0]['port']=18443;save('final-probe-input',front)
+    api('PATCH','/api/config-profiles/',{'uuid':created['profile'],'config':saved['config']})
+    require(api('GET','/api/config-profiles/'+created['profile'])['config']==saved['config'],'Alternate profile mismatch')
+    return {'frontend_port':18443,'legacy_port':2083,'profile_verified':True}
+
+
 if __name__=='__main__':
     try:
-        p=argparse.ArgumentParser();p.add_argument('action',choices=['prepare_panel','prepare_entry','arm','disarm','stop_old','activate','publish','rollback','retry']);p.add_argument('--role',choices=['entry','panel']);a=p.parse_args()
+        p=argparse.ArgumentParser();p.add_argument('action',choices=['prepare_panel','prepare_entry','arm','disarm','stop_old','activate','publish','rollback','retry','alternate_port']);p.add_argument('--role',choices=['entry','panel']);a=p.parse_args()
         print(json.dumps(globals()[a.action](a.role) if a.action in ['arm','disarm','rollback','retry'] else globals()[a.action]()))
     except Exception as e:
         print(json.dumps({'failed':True,'error':type(e).__name__,'detail':str(e) if isinstance(e,RuntimeError) else 'Inspect private state'}));sys.exit(1)

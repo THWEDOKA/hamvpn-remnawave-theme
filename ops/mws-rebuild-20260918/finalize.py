@@ -26,13 +26,14 @@ def subscription():
     wires=[o for o in main[0]['outbounds'] if o.get('protocol')=='vless' and any(v.get('address')==domain for v in o.get('settings',{}).get('vnext',[]))]
     require(len(wires)==1,'Missing new public outbound')
     wire=wires[0];v=wire['settings']['vnext'][0];s=wire['streamSettings'];r=s['realitySettings']
-    require(v['port']==443 and v['users'][0]['id']==user['vlessUuid'] and v['users'][0]['flow']=='xtls-rprx-vision','Public credentials/port/flow mismatch')
+    expected_port=read('cutover-panel')['wanted_host']['port']
+    require(v['port']==expected_port and v['users'][0]['id']==user['vlessUuid'] and v['users'][0]['flow']=='xtls-rprx-vision','Public credentials/port/flow mismatch')
     require(s['security']=='reality' and s['network'] in ('raw','tcp') and r['serverName']==domain
             and r['publicKey']==plan['keys']['entry']['public'] and r['shortId']==plan['keys']['entry']['short'],'Public REALITY mismatch')
     proxies=[p for p in responses['mihomo'].get('proxies',[]) if p.get('name')==old['remark']]
     require(len(proxies)==1,'Missing or duplicated PC host')
     p=proxies[0]
-    require(p['server']==domain and p['port']==443 and p['type']=='vless' and p['tls'] is True
+    require(p['server']==domain and p['port']==expected_port and p['type']=='vless' and p['tls'] is True
             and p['uuid']==user['vlessUuid'] and p['flow']=='xtls-rprx-vision' and p['servername']==domain
             and p['reality-opts']['public-key']==r['publicKey'] and p['reality-opts']['short-id']==r['shortId']
             and not p.get('skip-cert-verify',False),'PC subscription mismatch')
