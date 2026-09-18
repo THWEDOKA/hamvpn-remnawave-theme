@@ -24,6 +24,28 @@ TIMER = 'ham-rs633-nl5-rollback'
 CLONE_NAME = 'HAM-NL5-REVERSE-AEZA633'
 
 
+def plan():
+    return read('plan-v2') if (STATE / 'plan-v2.json').exists() else read('plan')
+
+
+def replan_unique_tags():
+    api, _ = client(); before = read('panel-before'); original = read('plan')
+    require(not (STATE / 'plan-v2.json').exists() and not (STATE / 'objects.json').exists(), 'Replan already applied or clone exists')
+    require(not any(p['name'] == CLONE_NAME for p in api('GET', '/api/config-profiles/')['configProfiles']), 'Clone creation uncertain')
+    require(api('GET', '/api/hosts/') == before['all_hosts'], 'Hosts changed')
+    require(api('GET', '/api/config-profiles/' + EP)['config'] == before['profiles'][EP]['config'], 'Entry changed')
+    require(api('GET', '/api/config-profiles/' + XP)['config'] == before['profiles'][XP]['config'], 'Shared profile changed')
+    require(binding(api('GET', '/api/nodes/' + EXIT_NODE)) == binding(before['nodes'][EXIT_NODE]), 'Node changed')
+    require(status()['service']['ActiveState'] == 'inactive', 'Rollback running')
+    run('systemctl', 'stop', TIMER + '.timer')
+    require(all(v['ActiveState'] == 'inactive' for v in status().values()), 'Old rollback not stopped')
+    backend = next(i for i in original['exit']['inbounds'] if i['tag'] == m.TAG)
+    private = backend['streamSettings']['realitySettings']['privateKey']
+    revised = dict(original, exit=m.backend(before['profiles'][XP]['config'], private, original['short']))
+    save('plan-v2', revised)
+    return {'unmutated_clone_replanned': True, 'original_plan_preserved': True, 'old_rollback_inactive': True}
+
+
 def client():
     path = Path(__file__).resolve().parents[1] / 'selfsteal-us3/panel_api.py'
     spec = importlib.util.spec_from_file_location('private_api', path)
@@ -133,21 +155,21 @@ def exports():
 
 
 def stage():
-    api, _ = client(); before = read('panel-before'); plan = read('plan'); proof = json.load(sys.stdin)
-    require(proof.get('tested') and proof['sha256'] == sha(plan['exit']), 'Installed exit test required')
+    api, _ = client(); before = read('panel-before'); candidate_plan = plan(); proof = json.load(sys.stdin)
+    require(proof.get('tested') and proof['sha256'] == sha(candidate_plan['exit']), 'Installed exit test required')
     require(status()['timer']['ActiveState'] == 'active', 'Rollback required')
     require(api('GET', '/api/config-profiles/' + XP)['config'] == before['profiles'][XP]['config'], 'Exit drift')
     require(binding(api('GET', '/api/nodes/' + EXIT_NODE)) == binding(before['nodes'][EXIT_NODE]), 'Exit binding drift')
     save('stage-intent', {'time': time.time()})
-    require(not (STATE / 'clone-intent.json').exists(), 'Clone intent exists; reconcile instead of repeating')
-    save('clone-intent', {'name': CLONE_NAME, 'config_sha256': sha(plan['exit'])})
-    p = api('POST', '/api/config-profiles/', {'name': CLONE_NAME, 'config': plan['exit']})
-    require(p['uuid'] not in before['initial_profiles'] and p['config'] == plan['exit'], 'Clone readback/ownership')
+    require(not (STATE / 'clone-intent-v2.json').exists(), 'Clone intent exists; reconcile instead of repeating')
+    save('clone-intent-v2', {'name': CLONE_NAME, 'config_sha256': sha(candidate_plan['exit'])})
+    p = api('POST', '/api/config-profiles/', {'name': CLONE_NAME, 'config': candidate_plan['exit']})
+    require(p['uuid'] not in before['initial_profiles'] and p['config'] == candidate_plan['exit'], 'Clone readback/ownership')
     old_tags = {i['tag']: i['uuid'] for i in before['profiles'][XP]['inbounds']}
     new_tags = {i['tag']: i['uuid'] for i in p['inbounds']}
-    require(len(new_tags) == len(p['inbounds']) and set(new_tags) == set(old_tags) | {m.TAG}, 'Clone tag mapping')
+    require(len(new_tags) == len(p['inbounds']) and set(new_tags) == {m.legacy_tag(t) for t in old_tags} | {m.TAG}, 'Clone tag mapping')
     inbound = new_tags[m.TAG]
-    mapping = {old_id: new_tags[tag] for tag, old_id in old_tags.items()}
+    mapping = {old_id: new_tags[m.legacy_tag(tag)] for tag, old_id in old_tags.items()}
     objects = {'profile': p['uuid'], 'inbound': inbound, 'mapping': mapping}; save('objects', objects)
     # Preserve legacy users on the cloned public 443. Never change the shared profile.
     for squad in before['squads']:
@@ -161,7 +183,7 @@ def stage():
         require({i['uuid'] for i in api('GET', '/api/internal-squads/' + squad['uuid'])['inbounds']} == set(wanted_ids), 'Clone rights readback')
     s = api('POST', '/api/internal-squads/', {'name': 'HAM-RS633-NL5-SVC', 'inbounds': [inbound]})
     objects['squad'] = s['uuid']; save('objects', objects)
-    body = {'uuid': plan['service_id'], 'username': 'ham_rs633_nl5_service', 'status': 'ACTIVE',
+    body = {'uuid': candidate_plan['service_id'], 'username': 'ham_rs633_nl5_service', 'status': 'ACTIVE',
         'expireAt': '2036-09-18T00:00:00Z', 'trafficLimitBytes': 0, 'trafficLimitStrategy': 'NO_RESET',
         'tag': 'RS633_NL5_SVC', 'description': 'Dedicated loopback reverse Reality service', 'activeInternalSquads': [s['uuid']]}
     save('service-intent', body); user = api('POST', '/api/users/', body); save('service', user)
@@ -169,7 +191,7 @@ def stage():
     wanted = {'activeConfigProfileUuid': p['uuid'],
               'activeInbounds': sorted([mapping[i] for i in old_binding['activeInbounds']] + [inbound])}
     save('wanted-binding', wanted); api('PATCH', '/api/nodes/', {'uuid': EXIT_NODE, 'configProfile': wanted})
-    wire = m.wire(user['vlessUuid'], plan['public'], plan['short']); save('wire', wire)
+    wire = m.wire(user['vlessUuid'], candidate_plan['public'], candidate_plan['short']); save('wire', wire)
     save('entry-candidate', m.entry(before['profiles'][EP]['config'], wire))
     return {'dedicated_loopback_backend_staged': True, 'legacy_443_preserved': True}
 
@@ -200,7 +222,7 @@ def verify():
     require(api('GET', '/api/config-profiles/' + EP)['config'] == candidate, 'Entry config drift')
     obj = read('objects')
     require(api('GET', '/api/config-profiles/' + XP)['config'] == before['profiles'][XP]['config'], 'Shared profile changed')
-    require(api('GET', '/api/config-profiles/' + obj['profile'])['config'] == read('plan')['exit'], 'Clone config drift')
+    require(api('GET', '/api/config-profiles/' + obj['profile'])['config'] == plan()['exit'], 'Clone config drift')
     for ident, host in before['hosts'].items(): require(api('GET', '/api/hosts/' + ident) == host, 'Host drift')
     require(binding(api('GET', '/api/nodes/' + ENTRY_NODE)) == binding(before['nodes'][ENTRY_NODE]), 'Entry binding drift')
     require(binding(api('GET', '/api/nodes/' + EXIT_NODE)) == read('wanted-binding'), 'Exit binding drift')
@@ -264,12 +286,12 @@ def rollback():
         require(len(matches) <= 1, 'Ambiguous pending clone')
         if matches:
             p = api('GET', '/api/config-profiles/' + matches[0]['uuid'])
-            require(p['uuid'] not in before['initial_profiles'] and p['config'] == read('plan')['exit'] and not p['nodes'], 'Pending clone ownership')
+            require(p['uuid'] not in before['initial_profiles'] and p['config'] == plan()['exit'] and not p['nodes'], 'Pending clone ownership')
             # Lost creation response: no subsequent write could have occurred.
     if (STATE / 'objects.json').exists():
         obj = read('objects')
         clone = api('GET', '/api/config-profiles/' + obj['profile'])
-        require(clone['config'] == read('plan')['exit'] and not clone['nodes'], 'Clone ownership conflict')
+        require(clone['config'] == plan()['exit'] and not clone['nodes'], 'Clone ownership conflict')
         owned = set(obj['mapping'].values())
         for squad in api('GET', '/api/internal-squads/')['internalSquads']:
             ids = {i['uuid'] for i in squad['inbounds']}
@@ -287,4 +309,4 @@ def rollback():
 
 if __name__ == '__main__':
     cli({k: globals()[k] for k in ['prepare', 'accept_backup', 'arm', 'create_probe', 'exports',
-        'stage', 'accept_probe', 'apply', 'verify', 'finish', 'cleanup', 'rollback']})
+        'stage', 'accept_probe', 'apply', 'verify', 'finish', 'cleanup', 'rollback', 'replan_unique_tags']})

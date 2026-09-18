@@ -15,7 +15,8 @@ class Tests(unittest.TestCase):
     def test_legacy_exit_preserved(self):
         c = {'inbounds': [{'tag': 'legacy', 'port': 443}], 'outbounds': [1], 'routing': {'keep': True}}
         n = m.backend(c, 'fixture', '00')
-        self.assertEqual(n['inbounds'][:-1], c['inbounds'])
+        legacy = dict(n['inbounds'][0]); legacy['tag'] = 'legacy'
+        self.assertEqual(legacy, c['inbounds'][0])
         self.assertEqual(n['inbounds'][-1]['listen'], '127.0.0.1')
         for k in ['outbounds', 'routing']: self.assertEqual(n[k], c[k])
         with self.assertRaises(AssertionError): m.backend(n, 'fixture', '00')

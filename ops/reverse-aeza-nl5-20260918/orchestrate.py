@@ -74,7 +74,7 @@ def ssh():
 
 
 def stage():
-    proof = call('exit', 'probe', 'test', get('panel', 'plan')['exit'])
+    proof = call('exit', 'probe', 'test', get('panel', 'plan-v2')['exit'])
     assert proof['tested']; print(proof, flush=True)
     print(call('panel', 'panel', 'arm'), flush=True)
     print(call('panel', 'panel', 'stage', proof), flush=True)

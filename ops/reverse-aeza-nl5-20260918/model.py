@@ -9,8 +9,17 @@ ACCOUNT = 'ham-rs633-nl5'
 UNIT = 'ham-rs633-nl5'
 
 
+def legacy_tag(tag):
+    return 'nl5-legacy-' + tag
+
+
 def backend(config, private, short):
     out = deepcopy(config)
+    mapping = {i['tag']: legacy_tag(i['tag']) for i in out['inbounds']}
+    for inbound in out['inbounds']: inbound['tag'] = mapping[inbound['tag']]
+    for rule in out.get('routing', {}).get('rules', []):
+        if isinstance(rule, dict) and 'inboundTag' in rule:
+            rule['inboundTag'] = [mapping.get(tag, tag) for tag in rule['inboundTag']]
     assert not any(i['tag'] == TAG or i.get('port') == B for i in out['inbounds'])
     out['inbounds'].append({'tag': TAG, 'listen': '127.0.0.1', 'port': B,
         'protocol': 'vless', 'settings': {'clients': [], 'decryption': 'none'},
