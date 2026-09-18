@@ -286,8 +286,8 @@ def certificate(role):
 def renew(role):
     guard(role); read('certificate')
     args = ['certbot', 'renew', '--cert-name', TARGETS[role]['domain'], '--dry-run', '--run-deploy-hooks']
-    help_text = run('certbot', '--help', 'all').decode()
-    if '--no-random-sleep-on-renew' in help_text: args.append('--no-random-sleep-on-renew')
+    supported = subprocess.run(['certbot','--no-random-sleep-on-renew','--version'],capture_output=True)
+    if supported.returncode == 0: args.append('--no-random-sleep-on-renew')
     run(*args, timeout=240)
     require(run('systemctl', 'is-active', 'certbot.timer').strip() == b'active', 'Renewal timer inactive')
     save('renewal', {'passed': True, 'time': time.time()})

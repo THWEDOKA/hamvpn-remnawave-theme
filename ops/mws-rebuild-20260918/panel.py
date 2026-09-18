@@ -47,6 +47,7 @@ def stage():
     proof=json.load(sys.stdin)
     require(proof.get('backend_passed') is True and proof.get('expected_egress')==TARGETS['exit']['ip']
             and 0<=time.time()-proof.get('time',0)<1800,'Fresh real backend proof required')
+    require(proof.get('wire_sha256')==digest(json.dumps(plan['foreign'],sort_keys=True).encode()),'Backend proof is for another configuration')
     require(not (STATE/'stage-intent.json').exists(),'Staging intent exists; reconcile before retry')
     require(api('GET','/api/config-profiles/'+OLD_PROFILE)['config']==before['profile']['config'],'Old profile drift')
     name='HAM-MWS2-RU-DIRECT-FOREIGN'
@@ -89,9 +90,26 @@ def stage():
     return {'candidate_node_connected':True,'old_hosts_unchanged':True,'preview_port':18443,'test_user_expires_hours':6}
 
 
+def reverse_plan():
+    require(not (STATE/'stage-intent.json').exists(),'Cannot change staged topology')
+    proof=json.load(sys.stdin)
+    require(proof.get('reverse_loopback_only') is True and proof.get('ssh_restrictions_verified') is True
+            and 0<=time.time()-proof.get('time',0)<600,'Fresh restricted listener proof required')
+    plan=read('plan');endpoint=plan['foreign']['settings']['vnext'][0]
+    require(endpoint['address']==TARGETS['exit']['ip'] and endpoint['port']==443,'Plan already changed')
+    save('direct-plan-before',plan)
+    endpoint['address']='127.0.0.1';endpoint['port']=27443
+    plan['entry']['outbounds'][0]=plan['foreign']
+    plan['transport']='REALITY inside restricted reverse SSH'
+    entry=read('entry-input');entry['config']=plan['entry']
+    save('entry-input',entry);save('plan',plan)
+    save('backend-probe-input',{'outbound':plan['foreign'],'expected_egress':TARGETS['exit']['ip']})
+    return {'private_candidate_uses_reverse':True,'no_panel_bindings_changed':True}
+
+
 if __name__=='__main__':
     try:
-        guard('panel');p=argparse.ArgumentParser();p.add_argument('action',choices=['plan','stage']);a=p.parse_args()
+        guard('panel');p=argparse.ArgumentParser();p.add_argument('action',choices=['plan','stage','reverse_plan']);a=p.parse_args()
         print(json.dumps(globals()[a.action]()))
     except Exception as e:
         print(json.dumps({'failed':True,'error':type(e).__name__,'detail':str(e) if isinstance(e,RuntimeError) else 'Inspect private state'}));sys.exit(1)
