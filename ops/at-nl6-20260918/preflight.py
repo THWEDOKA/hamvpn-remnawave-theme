@@ -3,6 +3,9 @@
 snapshot/inspect are API-read-only. account/cleanup may mutate ONLY a new
 intent-owned 3-hour/512-MiB probe. No profiles, hosts, squads, DNS or SSH writes.
 Every lifecycle call requires entry_id; both entries are always inventoried.
+Optional --run-id uses preflight/<entry>/runs/<slug>, never the closed default
+store. Slugs are 1-48 lowercase ASCII letters/digits with single internal
+hyphens and a leading letter. Omit it to preserve the legacy lifecycle.
 Old six-route state/identity is NEVER read or reused. account returns private
 data to callers in RAM; CLI outputs only whitelisted counters/booleans.
 """
@@ -13,6 +16,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import time
@@ -56,13 +60,30 @@ def route_ids(values):
     return sorted(values)
 
 
+def run_fields(run_id):
+    require(run_id is None or (isinstance(run_id, str) and 1 <= len(run_id) <= 48 and
+            re.fullmatch(r'[a-z][a-z0-9]*(?:-[a-z0-9]+)*', run_id) is not None),
+            'Invalid run_id: expected a bounded lowercase slug')
+    # Absence, not null, preserves hashes and markers of existing lifecycles.
+    return {} if run_id is None else dict(run_id=run_id)
+
+
+def check_run(value, store):
+    require({k: value[k] for k in ('run_id',) if k in value} ==
+            run_fields(getattr(store, 'run_id', None)), 'Foreign run lifecycle')
+
+
 class Store(shared.Store):
-    def __init__(self, entry_id, path=None):
+    def __init__(self, entry_id, path=None, *, run_id=None):
         entry(entry_id)
+        run_fields(run_id)
+        require(path is None or run_id is None, 'Explicit run cannot override AT/NL6 state root')
         # Reuse ONLY storage implementation; never its old default directory.
-        super().__init__(Path(path) if path is not None else STATE/entry_id)
+        selected = Path(path) if path is not None else STATE/entry_id
+        if run_id is not None: selected = selected/'runs'/run_id
+        super().__init__(selected)
         require('cloud140-six-20260918' not in self.path.as_posix(), 'Old closed namespace prohibited')
-        self.entry_id = entry_id
+        self.entry_id, self.run_id = entry_id, run_id
 
 
 def excluded(host):
@@ -134,6 +155,7 @@ def baseline(store, entry_id):
     entry(entry_id)
     require(getattr(store, 'entry_id', None) == entry_id, 'Foreign store entry namespace')
     value = store.get('before')
+    check_run(value, store)
     require(value['scope'] == SCOPE and value['entry_id'] == entry_id and
             value['entries'] == ENTRIES and value['targets'] == TARGETS, 'Foreign snapshot scope/targets/entry')
     return value
@@ -148,6 +170,7 @@ def summary(value):
     health.update({key: bool(nodes[t['node']]['isConnected'] and not nodes[t['node']]['isDisabled'])
                    for key, t in TARGETS.items()})
     return dict(snapshot_verified=True, scope=SCOPE, entry_id=value['entry_id'], sha256=digest(value),
+                **run_fields(value.get('run_id')),
                 inventoried_entries=2, selected_exits=2, selected_hosts=4, profiles=len(value['profiles']),
                 preserved_nodes=len(value['nodes']), preserved_hosts=len(value['hosts']),
                 shared_profiles=sum(len(ids) > 1 for ids in value['profile_consumers'].values()), panel_connected=health,
@@ -157,8 +180,9 @@ def summary(value):
 def snapshot(api, store, entry_id):
     entry(entry_id)
     require(getattr(store, 'entry_id', None) == entry_id, 'Foreign store namespace')
+    identity = run_fields(getattr(store, 'run_id', None))
     require(not store.exists('before'), 'Immutable snapshot exists; do not overwrite')
-    store.put('before', collect(api, entry_id))
+    store.put('before', dict(collect(api, entry_id), **identity))
     return summary(baseline(store, entry_id))
 
 
@@ -177,6 +201,7 @@ def live_rights(api, before, routes):
 
 def read_intent(store, entry_id):
     before = baseline(store, entry_id); value = store.get('test-intent')
+    check_run(value, store)
     require(value['scope'] == SCOPE and value['entry_id'] == entry_id and value['snapshot_sha256'] == digest(before), 'Foreign probe intent')
     routes = route_ids(value['routes']); body = value['body']
     expected = sorted({s for r in routes for key in ('host', 'auto') for s in before['customer_rights'][TARGETS[r][key]]})
@@ -191,23 +216,28 @@ def read_intent(store, entry_id):
 def probe_user(api, store, entry_id):
     require(not store.exists('test-cleanup') and not store.exists('test-cleanup-intent'), 'Probe lifecycle closed')
     body, _ = read_intent(store, entry_id)
+    if store.exists('test-created'):
+        require(store.get('test-created') == marker(body, entry_id, getattr(store, 'run_id', None)),
+                'Foreign created marker')
     return owned(api('GET', '/api/users/'+body['uuid']), body, usable=True)
 
 
-def marker(body, entry_id):
-    return dict(scope=SCOPE, entry_id=entry_id, uuid=body['uuid'])
+def marker(body, entry_id, run_id=None):
+    return dict(scope=SCOPE, entry_id=entry_id, uuid=body['uuid'], **run_fields(run_id))
 
 
 def account(api, query, store, entry_id, routes):
     routes = route_ids(routes)
     require(not store.exists('test-cleanup') and not store.exists('test-cleanup-intent'), 'Probe lifecycle closed')
     before = baseline(store, entry_id)
+    identity = run_fields(getattr(store, 'run_id', None))
     rights = live_rights(api, before, routes)
     if store.exists('test-intent'):
         body, old_routes = read_intent(store, entry_id)
         require(routes == old_routes, 'Probe route scope cannot expand')
         require(remaining(query, body['uuid']) == 1, 'Uncertain create; never repeat POST')
     else:
+        require(not store.exists('test-created'), 'Created marker without probe intent')
         identifier = str(uuid.uuid4())
         require(remaining(query, identifier) == 0, 'Identity already exists')
         now = datetime.now(timezone.utc)
@@ -215,19 +245,21 @@ def account(api, query, store, entry_id, routes):
                     description=DESCRIPTION, expireAt=(now+timedelta(hours=3)).isoformat(),
                     trafficLimitBytes=LIMIT, trafficLimitStrategy='NO_RESET', activeInternalSquads=rights)
         store.put('test-intent', dict(scope=SCOPE, entry_id=entry_id, routes=routes, snapshot_sha256=digest(before),
-                                     created_at=now.timestamp(), body=body))
+                                     created_at=now.timestamp(), body=body, **identity))
         try: api('POST', '/api/users/', body)
         except Exception: pass  # Always resolve by readback, never echo response.
         require(remaining(query, identifier) == 1, 'Create not confirmed; intent retained without retry')
     user = probe_user(api, store, entry_id)
+    expected = marker(body, entry_id, getattr(store, 'run_id', None))
     if store.exists('test-created'):
-        require(store.get('test-created') == marker(body, entry_id), 'Foreign created marker')
-    else: store.put('test-created', marker(body, entry_id))
+        require(store.get('test-created') == expected, 'Foreign created marker')
+    else: store.put('test-created', expected)
     return user  # SECRET RAM result; CLI does not print it.
 
 
 def cleanup(api, query, store, entry_id):
-    body, _ = read_intent(store, entry_id); expected = marker(body, entry_id)
+    body, _ = read_intent(store, entry_id)
+    expected = marker(body, entry_id, getattr(store, 'run_id', None))
     for name in ('test-created', 'test-cleanup-intent'):
         if store.exists(name): require(store.get(name) == expected, 'Foreign lifecycle marker')
     if store.exists('test-cleanup'):
@@ -249,12 +281,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('snapshot', 'inspect', 'account', 'cleanup'))
     parser.add_argument('--entry-id', required=True, choices=tuple(ENTRIES))
+    parser.add_argument('--run-id', help='Fresh AT/NL6 lifecycle slug; omit to use the existing default store')
     parser.add_argument('--routes', nargs='+', choices=tuple(TARGETS))
     args = parser.parse_args()
     try:
         require((args.routes is not None) == (args.action == 'account'), 'Explicit route subset required only for account')
         os.umask(0o077)
-        store = Store(args.entry_id); store.secure()
+        store = Store(args.entry_id, run_id=args.run_id); store.secure()
         import fcntl
         fd = os.open(store.path/'operation.lock', os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'rb') as lock:
@@ -271,7 +304,7 @@ def main():
                     account(api, query, store, args.entry_id, args.routes)
                     result = dict(disposable_probe_ready=True, entry_id=args.entry_id, routes=route_ids(args.routes),
                                   traffic_limit_bytes=LIMIT, lifetime_seconds=10800)
-            print(json.dumps(result))
+            print(json.dumps(dict(result, **run_fields(args.run_id))))
     except Exception:
         print(json.dumps(dict(error='PreflightFailed', message='Inspect protected scoped state; no automatic retry or secret output')), file=sys.stderr)
         return 1

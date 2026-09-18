@@ -14,7 +14,8 @@ SECRET = 'SYNTHETIC-PRIVATE-MARKER'
 
 
 class MemoryStore:
-    def __init__(self, entry_id='cloud'): self.entry_id, self.data = entry_id, {}
+    def __init__(self, entry_id='cloud', run_id=None):
+        self.entry_id, self.run_id, self.data = entry_id, run_id, {}
     def exists(self, name): return name in self.data
     def get(self, name): return deepcopy(self.data[name])
     def put(self, name, value):
@@ -23,8 +24,8 @@ class MemoryStore:
 
 
 class Fixture:
-    def __init__(self, entry_id='cloud'):
-        self.entry_id = entry_id; self.store = MemoryStore(entry_id)
+    def __init__(self, entry_id='cloud', run_id=None):
+        self.entry_id = entry_id; self.store = MemoryStore(entry_id, run_id)
         self.nodes, self.hosts, self.profiles, self.users, self.calls, self.sql = {}, {}, {}, {}, [], []
         self.squads = [dict(uuid=str(uuid.uuid4()), name=name, inbounds=[]) for name in sorted(p.CUSTOMER_NAMES)]
         self.squads.append(dict(uuid=str(uuid.uuid4()), name='BACKEND_SERVICE', inbounds=[]))
@@ -233,6 +234,133 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(p.shared.SCOPE, 'cloud140-six-20260918')
         with self.assertRaises(RuntimeError): p.Store('cloud', p.shared.STATE)
         with self.assertRaises(RuntimeError): p.Store('aeza').file('../foreign')
+
+    def test_explicit_runs_are_bounded_subnamespaces_only(self):
+        for entry_id in p.ENTRIES:
+            for run_id in ('a', 'deployment-20260918', 'a'*48):
+                with self.subTest(entry_id=entry_id, run_id=run_id):
+                    store = p.Store(entry_id, run_id=run_id)
+                    self.assertEqual(store.path, p.STATE/entry_id/'runs'/run_id)
+                    self.assertEqual(store.run_id, run_id)
+                    self.assertEqual(store.entry_id, entry_id)
+            self.assertEqual(p.Store(entry_id).path, p.STATE/entry_id)
+        custom = Path('/root/private-custom-state')
+        self.assertEqual(p.Store('cloud', custom).path, custom)
+        for custom in (p.STATE, p.STATE/'cloud', p.shared.STATE, Path('/tmp/foreign')):
+            with self.assertRaises(RuntimeError): p.Store('cloud', custom, run_id='deploy')
+        with self.assertRaises(RuntimeError): p.Store('pl', run_id='deploy')
+
+    def test_invalid_run_ids_rejected_without_filesystem_access(self):
+        invalid = ('', '.', '..', '../cloud', 'a/../b', '/root', r'a\b', r'C:\root',
+                   'https://host', 'a:b', 'a%2fb', 'a\x00b', 'a\nb', 'a\n', 'a b',
+                   ' a', 'a ', 'A', 'déploy', 'а', '1', '-a', 'a-', 'a--b', 'a_b',
+                   'a'*49, 0, False, [], {})
+        with patch.object(p.shared.Store, '__init__') as parent:
+            for run_id in invalid:
+                with self.subTest(run_id=run_id), self.assertRaises(RuntimeError):
+                    p.Store('aeza', run_id=run_id)
+            parent.assert_not_called()
+
+    def test_default_record_format_and_closed_lifecycle_unchanged(self):
+        self.f.snapshot(); self.f.account(); self.f.cleanup()
+        for value in self.f.store.data.values(): self.assertNotIn('run_id', value)
+        self.assertNotIn('run_id', p.summary(p.baseline(self.f.store, 'cloud')))
+        self.assertEqual(p.marker({'uuid': 'legacy'}, 'cloud'),
+                         dict(scope=p.SCOPE, entry_id='cloud', uuid='legacy'))
+        with self.assertRaises(RuntimeError): self.f.account()
+
+    def test_fresh_lifecycle_leaves_closed_defaults_and_other_runs_untouched(self):
+        for entry_id in p.ENTRIES:
+            with self.subTest(entry_id=entry_id):
+                f = Fixture(entry_id); f.snapshot(); f.account(); f.cleanup()
+                closed = f.store; original = deepcopy(closed.data)
+                completed = []
+                for run_id in ('deploy-a', 'deploy-b'):
+                    f.store = MemoryStore(entry_id, run_id)
+                    result = f.snapshot(); user = f.account(('at', 'nl6'))
+                    self.assertEqual(result['run_id'], run_id)
+                    self.assertEqual(p.probe_user(f.api, f.store, entry_id)['uuid'], user['uuid'])
+                    self.assertTrue(f.cleanup()['absence_verified'])
+                    self.assertTrue(f.cleanup()['absence_verified'])
+                    for value in f.store.data.values(): self.assertEqual(value['run_id'], run_id)
+                    completed.append(user['uuid'])
+                    with self.assertRaises(RuntimeError): f.account(('at', 'nl6'))
+                self.assertNotEqual(*completed)
+                self.assertEqual(closed.data, original)
+                f.store = closed
+                with self.assertRaises(RuntimeError): f.account()
+
+    def test_snapshot_from_wrong_run_or_legacy_namespace_rejected(self):
+        for source, destination in ((None, 'deploy'), ('deploy', None), ('deploy-a', 'deploy-b')):
+            with self.subTest(source=source, destination=destination):
+                f = Fixture('aeza', source); f.snapshot(); f.account()
+                f.store.run_id = destination; f.calls.clear(); f.sql.clear()
+                for action in (lambda: p.baseline(f.store, 'aeza'), f.account, f.cleanup,
+                               lambda: p.probe_user(f.api, f.store, 'aeza')):
+                    with self.assertRaises(RuntimeError): action()
+                self.assertEqual(f.calls, []); self.assertEqual(f.sql, [])
+
+    def test_run_snapshot_hash_and_intent_are_both_bound_to_run(self):
+        f = Fixture('aeza', 'deploy'); f.snapshot(); f.account()
+        before = f.store.get('before'); legacy = deepcopy(before); legacy.pop('run_id')
+        self.assertNotEqual(p.digest(before), p.digest(legacy))
+        intent = f.store.get('test-intent')
+        self.assertEqual(intent['snapshot_sha256'], p.digest(before))
+        # Even an otherwise matching snapshot hash cannot excuse foreign intent.
+        for run_id in (None, 'other'):
+            f.store.data['test-intent'] = deepcopy(intent)
+            if run_id is None: f.store.data['test-intent'].pop('run_id')
+            else: f.store.data['test-intent']['run_id'] = run_id
+            f.calls.clear(); f.sql.clear()
+            for action in (f.account, f.cleanup, lambda: p.probe_user(f.api, f.store, 'aeza')):
+                with self.assertRaises(RuntimeError): action()
+            self.assertFalse(any(c[0] != 'GET' for c in f.calls)); self.assertEqual(f.sql, [])
+
+    def test_foreign_run_lifecycle_markers_reject_cleanup_without_delete(self):
+        for name in ('test-created', 'test-cleanup-intent', 'test-cleanup'):
+            for run_id in (None, 'other'):
+                with self.subTest(name=name, run_id=run_id):
+                    f = Fixture('cloud', 'deploy'); f.snapshot(); user = f.account()
+                    foreign = p.marker(user, 'cloud', run_id)
+                    if name == 'test-cleanup': foreign['absence_verified'] = True
+                    f.store.data[name] = foreign; f.calls.clear(); f.sql.clear()
+                    with self.assertRaises(RuntimeError): f.cleanup()
+                    if name == 'test-created':
+                        with self.assertRaises(RuntimeError): f.account()
+                        with self.assertRaises(RuntimeError): p.probe_user(f.api, f.store, 'cloud')
+                    self.assertIn(user['uuid'], f.users)
+                    self.assertFalse(any(c[0] in ('POST', 'DELETE') for c in f.calls))
+
+    def test_orphan_created_marker_cannot_start_new_identity(self):
+        f = Fixture('aeza', 'deploy'); f.snapshot()
+        f.store.data['test-created'] = p.marker({'uuid': str(uuid.uuid4())}, 'aeza', 'other')
+        f.calls.clear(); f.sql.clear()
+        with self.assertRaises(RuntimeError): f.account()
+        self.assertFalse(f.store.exists('test-intent'))
+        self.assertFalse(any(c[0] == 'POST' for c in f.calls)); self.assertEqual(f.sql, [])
+
+    def test_null_run_field_cannot_relabel_legacy_record(self):
+        self.f.snapshot(); self.f.store.data['before']['run_id'] = None
+        with self.assertRaises(RuntimeError): p.baseline(self.f.store, 'cloud')
+
+    def test_cli_forwards_optional_run_id_and_rejects_bad_slug_before_secure(self):
+        for action in ('snapshot', 'inspect', 'account', 'cleanup'):
+            for run_id in (None, 'deploy-20260918'):
+                argv = ['preflight.py', action, '--entry-id', 'aeza']
+                if run_id is not None: argv += ['--run-id', run_id]
+                if action == 'account': argv += ['--routes', 'at', 'nl6']
+                with self.subTest(action=action, run_id=run_id), \
+                        patch.object(p.sys, 'argv', argv), patch.object(p, 'Store') as store, \
+                        patch.object(p.sys, 'stderr', new_callable=io.StringIO):
+                    store.return_value.secure.side_effect = RuntimeError(SECRET)
+                    self.assertEqual(p.main(), 1)
+                    store.assert_called_once_with('aeza', run_id=run_id)
+        with patch.object(p.sys, 'argv', ['preflight.py', 'snapshot', '--entry-id', 'cloud', '--run-id', '../aeza']), \
+                patch.object(p.Store, 'secure') as secure, patch.object(p, 'collect') as collect, \
+                patch.object(p.sys, 'stderr', new_callable=io.StringIO) as err:
+            self.assertEqual(p.main(), 1)
+            secure.assert_not_called(); collect.assert_not_called()
+        self.assertNotIn('../aeza', err.getvalue())
 
     def test_cli_requires_entry_before_store_and_suppresses_private_errors(self):
         with patch.object(p.sys, 'argv', ['preflight.py', 'snapshot']), patch.object(p, 'Store') as store, \
