@@ -45,5 +45,19 @@ class PreparationTests(unittest.TestCase):
         self.assertIn('http_challenge_verified', src)
         self.assertIn('Uncertain certificate attempt', src)
 
+    def test_new_services_do_not_stop_current_containers(self):
+        src=(ROOT/'node.py').read_text()
+        self.assertNotIn("'docker','stop'",src)
+        self.assertNotIn("'docker','rm'",src)
+        self.assertIn("'--env-file',str(env)",src)
+        self.assertIn("'--network','host'",src)
+
+    def test_panel_stage_requires_real_backend(self):
+        src=(ROOT/'panel.py').read_text()
+        self.assertIn("proof.get('backend_passed') is True",src)
+        self.assertIn("'old_hosts_unchanged':True",src)
+        self.assertNotIn("api('DELETE'",src)
+        self.assertNotIn("api('POST','/api/hosts/",src)
+
 
 if __name__ == '__main__': unittest.main()

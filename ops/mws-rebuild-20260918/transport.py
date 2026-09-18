@@ -29,7 +29,8 @@ def remote(role, cmd, data=None, timeout=600):
         # Reviewed scripts return safe diagnostics, but raw SSH stderr stays private.
         try:
             safe = json.loads(p.stdout)
-            if safe.get('failed') is True: print(json.dumps(safe), file=sys.stderr)
+            if safe.get('failed') is True or safe.get('backend_passed') is False or safe.get('frontend_passed') is False:
+                print(json.dumps(safe), file=sys.stderr)
         except Exception: pass
         raise RuntimeError('Remote action failed on '+role+', exit '+str(p.returncode))
     return p.stdout
