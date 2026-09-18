@@ -20,9 +20,12 @@ def test():
 
 def probe():
     data = json.load(sys.stdin); location = data['location']; wire = data['outbound']
-    require(location in ['entry', 'panel'], 'Unknown location')
+    require(location in ['entry', 'exit', 'panel'], 'Unknown location')
     with tempfile.TemporaryDirectory(prefix='ham-rs633-probe-') as folder:
-        if location == 'entry':
+        if location in ['entry', 'exit']:
+            import model as m
+            expected_server = m.ENTRY if location == 'entry' else m.EXIT
+            require(expected_server + '/' in run('ip', '-4', 'addr', 'show').decode(), 'Probe role/server mismatch')
             d = json.loads(run('docker', 'inspect', 'remnanode'))[0]
             require(d['HostConfig']['NetworkMode'] == 'host', 'Wrong namespace')
             binary = str(Path(folder) / 'xray'); run('docker', 'cp', 'remnanode:/usr/local/bin/xray', binary); os.chmod(binary, 0o700)
