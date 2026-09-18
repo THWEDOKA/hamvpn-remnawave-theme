@@ -40,7 +40,7 @@ def probe(data):
                     with socket.create_connection(('127.0.0.1',port),timeout=.2):break
                 except OSError:time.sleep(.1)
             else:raise RuntimeError('No client listener')
-            base=['curl.exe','--noproxy','','--socks5-hostname','127.0.0.1:'+str(port),'-4','-fsS','--max-time','25']
+            base=['curl.exe','--noproxy','','--socks5-hostname','127.0.0.1:'+str(port),'-4','-fsSL','--max-time','25']
             checks={}
             for name,url in [('foreign_204','https://www.gstatic.com/generate_204'),('foreign_ip','https://api.ipify.org'),('russian_ip','https://internet.yandex.ru')]:
                 args=['-o','NUL','-w','%{http_code}'] if name=='foreign_204' else []

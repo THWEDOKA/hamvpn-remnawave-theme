@@ -24,13 +24,13 @@ def probe(label,role='entry'):
                 except OSError:time.sleep(.1)
             else:raise RuntimeError('Probe listener unavailable')
             base=['curl','-4','--noproxy','','--socks5-hostname','127.0.0.1:'+str(port),
-                  '-fsS','--connect-timeout','8','--max-time','18']
+                  '-fsSL','--connect-timeout','8','--max-time','25']
             checks=[('foreign_204',['-o','/dev/null','-w','%{http_code}','https://www.gstatic.com/generate_204']),
                     ('foreign_ip',['https://api.ipify.org'])]
             if label=='frontend':checks.append(('russian_ip',['https://internet.yandex.ru']))
             results={}
             for name,args in checks:
-                q=subprocess.run(base+args,capture_output=True,text=True,timeout=25)
+                q=subprocess.run(base+args,capture_output=True,text=True,timeout=30)
                 if name=='russian_ip':
                     results[name]={'passed':q.returncode==0 and data['russian_egress'] in q.stdout,'curl_code':q.returncode}
                 else:
