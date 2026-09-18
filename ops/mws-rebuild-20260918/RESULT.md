@@ -85,3 +85,27 @@ Do not rerun cutover or deletion actions blindly: inspect their protected
 intent/readback files. Restoring a removed panel object now requires an
 explicit, scoped recovery plan; the cancelled cutover timer is not a general
 post-retirement restore mechanism.
+
+## Follow-up: renamed host and Firefox verification
+
+The user renamed the host to `🇳🇱 🌐 Обход #2` and changed its fingerprint to
+`firefox`. Fresh readback showed Firefox **before** the operation's idempotent
+apply step, so that step made no further host mutation. Current Happ and
+mihomo generated subscriptions both advertise Firefox. The operator preference
+is recorded in `codex/rules/vpn-fingerprint.md` and the local global AGENTS rule.
+
+Full-page tests through the actual generated Firefox outbound returned HTTP
+200 for Instagram (about 411 KB), Wikipedia (about 119 KB), and the Yandex
+Russian-IP check. Foreign egress remained `72.56.101.218`, Russian egress
+`176.109.85.244`. Isolated Windows mihomo also passed the three egress/204 tests.
+The probe's JSON serialization was corrected to emit real UTF-8: YAML parsing
+of escaped emoji surrogate pairs was an issue in the diagnostic harness,
+not evidence of an invalid production subscription. The separate short-lived
+diagnostic account was deleted and absence confirmed.
+
+Adding this host to automatic bypass was paused at the user's request during
+their Wi-Fi incident. No automatic-pool changes were made. Read-only discovery
+found that the active `⚡ Автовыбор Обхода` is a server-side Hysteria2/leastPing
+route on Selectal, not the disabled older Xray-template host with the same
+display name. Reachability from that selector must be tested before adding a
+backend. The Wi-Fi-specific symptom is not declared fixed without user feedback.
