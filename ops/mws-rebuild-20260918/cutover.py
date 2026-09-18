@@ -6,6 +6,7 @@ from node import ENTRY_CONTAINER, installed_test
 import routing
 
 TIMER='ham-mws2-cutover-rollback'
+WATCHDOG='rw-core-watchdog-ham-shared'
 HOST_FIELDS=('inbound','address','port','sni','host','path','alpn','fingerprint','securityLayer',
              'xhttpExtraParams','nodes','overrideSniFromAddress','keepSniBlank')
 
@@ -110,6 +111,12 @@ def stop_old():
     require(timer_status()['timer']['ActiveState']=='active','Entry rollback must be armed')
     require({k:v['Id'] for k,v in c.items()}==saved['containers'],'Container ownership drift')
     require(not (STATE/'old-stopped.json').exists(),'Old stop already attempted')
+    watchdog=Path('/etc/systemd/system/'+WATCHDOG+'.service')
+    require('Environment=CONTAINER='+OLD_CONTAINER in watchdog.read_text(),'Unexpected watchdog scope')
+    save('watchdog-before',{'service_sha256':digest(watchdog.read_bytes()),
+        'enabled':subprocess.run(['systemctl','is-enabled',WATCHDOG+'.timer'],capture_output=True,text=True).stdout.strip(),
+        'active':subprocess.run(['systemctl','is-active',WATCHDOG+'.timer'],capture_output=True,text=True).stdout.strip()})
+    run('systemctl','disable','--now',WATCHDOG+'.timer');run('systemctl','stop',WATCHDOG+'.service')
     save('old-stopped',{'time':time.time()});run('docker','stop','--time','15',OLD_CONTAINER,timeout=30)
     require(not containers()[OLD_CONTAINER]['State']['Running'],'Old container still running')
     return {'old_target_stopped':True,'other_containers_untouched':True}
@@ -154,8 +161,21 @@ def rollback(role):
         saved=read('cutover-entry');c=containers()
         require({k:v['Id'] for k,v in c.items()}==saved['containers'],'Container ownership drift; do not overwrite')
         run('docker','stop','--time','10',ENTRY_CONTAINER,timeout=25)
+        old=containers()[OLD_CONTAINER]
+        if not old['NetworkSettings']['Networks']:
+            run('docker','stop','--time','10',OLD_CONTAINER,timeout=25)
+            before=next(c for c in read('node-before')['containers'] if c['Name']=='/'+OLD_CONTAINER)
+            networks=before['NetworkSettings']['Networks']
+            require(list(networks)==['remnanode-ham-shared_default'],'Unexpected original network')
+            run('docker','network','connect','--ip',networks['remnanode-ham-shared_default']['IPAddress'],
+                'remnanode-ham-shared_default',OLD_CONTAINER)
         run('docker','start',OLD_CONTAINER)
         require(containers()[OLD_CONTAINER]['State']['Running'],'Old service did not recover')
+        if (STATE/'watchdog-before.json').exists():
+            w=read('watchdog-before')
+            require(digest(Path('/etc/systemd/system/'+WATCHDOG+'.service').read_bytes())==w['service_sha256'],'Watchdog ownership drift')
+            if w['enabled']=='enabled':run('systemctl','enable',WATCHDOG+'.timer')
+            if w['active']=='active':run('systemctl','start',WATCHDOG+'.timer')
     else:
         api=api_client();saved=read('cutover-panel');created=read('created');plan=read('plan')
         host=api('GET','/api/hosts/'+OLD_HOST);profile=api('GET','/api/config-profiles/'+created['profile'])
@@ -169,9 +189,28 @@ def rollback(role):
     return {'scoped_rollback_applied':True,'role':role}
 
 
+def retry(role):
+    guard(role);read('cutover-rollback')
+    require(all(v['ActiveState']=='inactive' and v.get('Job','0') in ('','0') for v in timer_status().values()),'Previous rollback still active')
+    if role=='panel':
+        api=api_client();c=read('created');before=read('panel-before')
+        require(selected(api('GET','/api/hosts/'+OLD_HOST))==selected(before['hosts'][0]),'Old host not restored')
+        require(api('GET','/api/nodes/'+OLD_NODE)['isConnected'],'Old node not connected')
+        require(api('GET','/api/config-profiles/'+c['profile'])['config']==read('plan')['entry'],'Preview profile not restored')
+    else:
+        c=containers();require(c[OLD_CONTAINER]['State']['Running'],'Old service not restored')
+        require('remnanode-ham-shared_default' in c[OLD_CONTAINER]['NetworkSettings']['Networks'],'Old network not restored')
+        run('docker','start',ENTRY_CONTAINER)
+    archive=STATE/('attempt-1-'+role);require(not archive.exists(),'Retry already prepared');archive.mkdir(mode=0o700)
+    for name in ['cutover-armed','cutover-rollback','cutover-active-intent','old-stopped']:
+        p=STATE/(name+'.json')
+        if p.exists():p.rename(archive/p.name)
+    return {'retry_prepared':True,'prior_attempt_retained':True,'role':role}
+
+
 if __name__=='__main__':
     try:
-        p=argparse.ArgumentParser();p.add_argument('action',choices=['prepare_panel','prepare_entry','arm','disarm','stop_old','activate','publish','rollback']);p.add_argument('--role',choices=['entry','panel']);a=p.parse_args()
-        print(json.dumps(globals()[a.action](a.role) if a.action in ['arm','disarm','rollback'] else globals()[a.action]()))
+        p=argparse.ArgumentParser();p.add_argument('action',choices=['prepare_panel','prepare_entry','arm','disarm','stop_old','activate','publish','rollback','retry']);p.add_argument('--role',choices=['entry','panel']);a=p.parse_args()
+        print(json.dumps(globals()[a.action](a.role) if a.action in ['arm','disarm','rollback','retry'] else globals()[a.action]()))
     except Exception as e:
         print(json.dumps({'failed':True,'error':type(e).__name__,'detail':str(e) if isinstance(e,RuntimeError) else 'Inspect private state'}));sys.exit(1)
