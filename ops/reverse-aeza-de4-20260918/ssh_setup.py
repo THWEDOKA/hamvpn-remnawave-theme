@@ -132,7 +132,10 @@ def install():
     CONF.chmod(0o755)  # Explicitly override the process root-only umask for public config.
     run('runuser', '-u', m.ACCOUNT, '--', 'test', '-r', str(HOME / '.ssh/id_ed25519'))
     expanded = run('runuser', '-u', m.ACCOUNT, '--', 'ssh', '-G', '-F', str(CONF / 'ssh_config'), 'aeza-de4').decode()
-    require('remoteforward 127.0.0.1:' + str(m.R) + ' 127.0.0.1:' + str(m.B) in expanded, 'Client forward mismatch')
+    # OpenSSH -G renders numeric forward addresses in brackets even for IPv4.
+    forwards = [line.replace('[127.0.0.1]', '127.0.0.1') for line in expanded.splitlines()
+                if line.startswith('remoteforward ')]
+    require(forwards == [f'remoteforward 127.0.0.1:{m.R} 127.0.0.1:{m.B}'], 'Client forward mismatch')
     run('systemd-analyze', 'verify', str(UNIT)); run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', '--now', m.UNIT + '.service')
     save('installed', {'time': time.time(), 'unit_sha256': sha(m.unit())})
