@@ -67,7 +67,8 @@ def server():
     import pwd
     guard('entry');read('node-before')
     public=json.load(sys.stdin)['public_key'].strip().split()
-    require(len(public)==2 and public[0]=='ssh-ed25519' and len(base64.b64decode(public[1]))==51,'Invalid public key')
+    require(len(public) in (2,3) and public[0]=='ssh-ed25519' and len(base64.b64decode(public[1]))==51,'Invalid public key')
+    public=public[:2]
     require(not DROPIN.exists() and not AUTH.exists(),'SSH policy exists; reconcile instead of overwrite')
     require(not run('ss','-H','-lnt','sport = :'+str(PORT)).strip(),'Reverse port occupied')
     try:pwd.getpwnam(USER)
