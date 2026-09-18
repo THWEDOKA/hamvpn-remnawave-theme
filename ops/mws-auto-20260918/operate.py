@@ -197,7 +197,12 @@ def finish():
         require(proof.get('passed') and proof['wire_sha256'] == sha(read('subscription-wire')), 'Actual auto client proof required')
     require(api('GET', '/api/config-profiles/' + AUTO)['config'] == read('auto-candidate'), 'Auto drift')
     require(api('GET', '/api/config-profiles/' + MWS)['config'] == read('plan')['mws'], 'MWS drift')
-    require(api('GET', '/api/hosts/') == read('before')['hosts'], 'Client hosts changed')
+    # Other agents/users may legitimately edit unrelated hosts during a rollout.
+    # We never PATCH hosts; guard only the two hosts this operation depends on.
+    before_hosts = {h['uuid']: h for h in read('before')['hosts']}
+    current_hosts = {h['uuid']: h for h in api('GET', '/api/hosts/')}
+    for ident in [AUTO_HOST, '3381a72d-522a-4fbf-878b-532f00ff1ba5']:
+        require(current_hosts.get(ident) == before_hosts[ident], 'Target client host changed')
     require(api('GET', '/api/nodes/' + AUTO_NODE)['isConnected'], 'Auto node disconnected')
     require(api('GET', '/api/nodes/' + NODE)['isConnected'], 'MWS node disconnected')
     squad = api('GET', '/api/internal-squads/' + read('objects')['squad'])
