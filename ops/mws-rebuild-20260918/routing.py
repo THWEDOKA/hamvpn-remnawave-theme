@@ -22,7 +22,7 @@ def outbound(address, domain, port, user, public_key, short_id):
         'address': address, 'port': port, 'users': [{
             'id': user, 'encryption': 'none', 'flow': 'xtls-rprx-vision'}]}]},
         'streamSettings': {'network': 'raw', 'security': 'reality',
-            'realitySettings': {'serverName': domain, 'fingerprint': 'chrome',
+            'realitySettings': {'serverName': domain, 'fingerprint': 'firefox',
                                 'publicKey': public_key, 'shortId': short_id}}}
 
 

@@ -35,6 +35,7 @@ class SplitRoutingTests(unittest.TestCase):
         self.assertEqual(self.out['streamSettings']['security'],'reality')
         self.assertEqual(self.out['settings']['vnext'][0]['address'],'72.56.101.218')
         self.assertNotIn('allowInsecure',str(self.c))
+        self.assertEqual(self.out['streamSettings']['realitySettings']['fingerprint'],'firefox')
 
     def test_mihomo_compatibility_and_local_target(self):
         reality=self.c['inbounds'][0]['streamSettings']['realitySettings']

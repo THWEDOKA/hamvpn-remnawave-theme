@@ -30,8 +30,8 @@ def create():
     return {'temporary_diagnostic_created':True,'actual_Happ_subscription_read':True}
 
 
-def pages():
-    guard('panel');wire=read('diagnostic-input')['outbound']
+def pages(wire=None):
+    guard('panel');wire=wire or read('diagnostic-input')['outbound']
     with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
     cfg={'log':{'loglevel':'none'},'inbounds':[{'listen':'127.0.0.1','port':port,'protocol':'socks','settings':{'auth':'noauth'}}],'outbounds':[wire]}
     p=subprocess.Popen(['/root/selfsteal-us3-test/xray','run','-c','stdin:'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
