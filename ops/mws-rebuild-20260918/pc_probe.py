@@ -27,7 +27,9 @@ def probe(data):
             'profile':{'store-selected':False,'store-fake-ip':False},
             'proxies':[data.get('mihomo_proxy') or proxy(data['outbound'])],
             'rules':['MATCH,'+(data.get('mihomo_proxy') or {}).get('name','MWS-PROBE')]}
-    raw=json.dumps(config).encode();flags=subprocess.CREATE_NO_WINDOW
+    # Mihomo parses JSON as YAML: escaped UTF-16 surrogate pairs (flag emoji)
+    # are not accepted by its YAML reader. Send actual UTF-8 instead.
+    raw=json.dumps(config,ensure_ascii=False).encode('utf-8');flags=subprocess.CREATE_NO_WINDOW
     with tempfile.TemporaryDirectory(prefix='ham-mws2-probe-') as folder:
         test=subprocess.run([str(BINARY),'-t','-d',folder,'-f','-'],input=raw,capture_output=True,creationflags=flags,timeout=20)
         assert test.returncode==0,'Mihomo configuration test failed'

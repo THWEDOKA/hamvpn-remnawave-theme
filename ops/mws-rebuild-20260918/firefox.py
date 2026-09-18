@@ -30,7 +30,8 @@ def apply():
     after=api('GET','/api/hosts/'+OLD_HOST);wanted=dict(host,fingerprint='firefox')
     require(after==wanted,'Unexpected host change')
     save('fingerprint-after',after)
-    return {'host':after['remark'],'fingerprint':'firefox','only_fingerprint_changed':True,'time':time.time()}
+    return {'host':after['remark'],'fingerprint':'firefox','changed':host['fingerprint']!='firefox',
+            'unrelated_fields_unchanged':True,'time':time.time()}
 
 
 def verify():
