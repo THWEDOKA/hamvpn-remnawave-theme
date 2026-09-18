@@ -94,7 +94,7 @@ def identity():
         return run('/usr/sbin/sshd', '-T', '-C', f'user={user},addr={source},host=aeza633').decode()
     before = {u + '@' + s: effective(u, s) for u in users for s in sources}
     save('ssh-policies-before', before)
-    account = create_account(); CONF.mkdir(mode=0o750); os.chown(CONF, 0, account.pw_gid)
+    account = create_account(); CONF.mkdir(mode=0o750); CONF.chmod(0o750); os.chown(CONF, 0, account.pw_gid)
     authorized = CONF / 'authorized_keys'
     write(authorized, f'from="{m.EXIT}/32",restrict,port-forwarding,permitlisten="127.0.0.1:{m.R}",command="/usr/sbin/nologin" {public}\n', 0o640)
     os.chown(authorized, 0, account.pw_gid)
@@ -118,11 +118,18 @@ def install():
     require(role() == 'exit', 'Exit only'); read('generated')
     pinned = sys.stdin.read().strip()
     require(pinned.startswith(m.ENTRY + ' ssh-ed25519 '), 'Wrong entry pin')
-    require(not CONF.exists() and not UNIT.exists(), 'Existing unit; reconcile')
-    account = pwd.getpwnam(m.ACCOUNT); CONF.mkdir(mode=0o755)
-    write(CONF / 'known_hosts', pinned + '\n', 0o644)
-    write(CONF / 'ssh_config', m.client(), 0o644)
-    write(UNIT, m.unit(), 0o644)
+    require(not (STATE / 'installed.json').exists(), 'Installed unit exists; reconcile')
+    account = pwd.getpwnam(m.ACCOUNT)
+    if CONF.exists() or UNIT.exists():
+        require((CONF / 'known_hosts').read_text() == pinned + '\n' and
+                (CONF / 'ssh_config').read_text() == m.client() and UNIT.read_text() == m.unit(),
+                'Partial installation ownership mismatch')
+    else:
+        CONF.mkdir(mode=0o755)
+        write(CONF / 'known_hosts', pinned + '\n', 0o644)
+        write(CONF / 'ssh_config', m.client(), 0o644)
+        write(UNIT, m.unit(), 0o644)
+    CONF.chmod(0o755)  # Explicitly override the process root-only umask for public config.
     run('runuser', '-u', m.ACCOUNT, '--', 'test', '-r', str(HOME / '.ssh/id_ed25519'))
     expanded = run('runuser', '-u', m.ACCOUNT, '--', 'ssh', '-G', '-F', str(CONF / 'ssh_config'), 'aeza-de4').decode()
     require('remoteforward 127.0.0.1:' + str(m.R) + ' 127.0.0.1:' + str(m.B) in expanded, 'Client forward mismatch')
@@ -130,6 +137,18 @@ def install():
     run('systemctl', 'enable', '--now', m.UNIT + '.service')
     save('installed', {'time': time.time(), 'unit_sha256': sha(m.unit())})
     return {'native_service_started': True}
+
+
+def repair_identity_permissions():
+    require(role() == 'entry', 'Entry only'); read('identity')
+    require(DROP.read_text() == m.sshd()[1], 'Identity ownership drift')
+    account = pwd.getpwnam(m.ACCOUNT)
+    require(CONF.stat().st_uid == 0 and CONF.stat().st_gid == account.pw_gid, 'Directory owner drift')
+    require((CONF / 'authorized_keys').stat().st_uid == 0, 'Authorized keys owner drift')
+    CONF.chmod(0o750)
+    require((CONF / 'authorized_keys').stat().st_mode & 0o777 == 0o640, 'Key file mode drift')
+    run('runuser', '-u', m.ACCOUNT, '--', 'test', '-r', str(CONF / 'authorized_keys'))
+    return {'owned_authorized_key_readable': True}
 
 
 def bpf_query():
@@ -191,4 +210,4 @@ def retire_old():
 
 if __name__ == '__main__':
     cli({k: globals()[k] for k in ['snapshot', 'mirror', 'accept_backup', 'generate', 'identity',
-        'install', 'verify', 'listener', 'restart', 'retire_old']})
+        'install', 'verify', 'listener', 'restart', 'retire_old', 'repair_identity_permissions']})

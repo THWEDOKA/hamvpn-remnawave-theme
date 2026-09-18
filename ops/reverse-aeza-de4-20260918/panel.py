@@ -187,8 +187,12 @@ def finish():
     result = verify(); proofs = json.load(sys.stdin); exports = read('export-wires')
     require(set(proofs) == set(exports), 'All real exported paths must be checked')
     for label, proof in proofs.items():
-        require(proof.get('passed') and proof['wire_sha256'] == sha(exports[label])
-                and 0 <= time.time() - proof['time'] < 900, 'Bad exported client proof: ' + label)
+        require(proof.get('checks') and proof['wire_sha256'] == sha(exports[label])
+                and 0 <= time.time() - proof['time'] < 900, 'Missing/stale exported client proof: ' + label)
+        # Do not expand a one-exit migration into repairs of already-failing neighbors.
+        # Their unchanged config/exports are guarded by verify()/exports().
+        if not label.startswith('neighbor-') or read('baseline-proofs')[label]['passed']:
+            require(proof.get('passed'), 'Client regression: ' + label)
     require(status()['service']['ActiveState'] == 'inactive', 'Rollback already executing')
     run('systemctl', 'stop', TIMER + '.timer')
     require(all(v['ActiveState'] == 'inactive' for v in status().values()), 'Rollback not inactive')
