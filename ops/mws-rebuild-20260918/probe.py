@@ -4,14 +4,16 @@ import tempfile
 from ops import *
 
 
-def probe(label):
-    guard('entry');data=json.load(sys.stdin)
+def probe(label,role='entry'):
+    guard(role);data=json.load(sys.stdin)
     with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]
     config={'log':{'loglevel':'none'},'inbounds':[{'listen':'127.0.0.1','port':port,
              'protocol':'socks','settings':{'auth':'noauth','udp':False}}],'outbounds':[data['outbound']]}
     with tempfile.TemporaryDirectory(prefix='probe-',dir=STATE) as folder:
         binary=Path(folder)/'xray'
-        run('docker','cp',OLD_CONTAINER+':/usr/local/bin/xray',str(binary));binary.chmod(0o700)
+        if role=='entry':run('docker','cp',OLD_CONTAINER+':/usr/local/bin/xray',str(binary))
+        else:shutil.copyfile('/root/selfsteal-us3-test/xray',binary)
+        binary.chmod(0o700)
         p=subprocess.Popen([str(binary),'run','-c','stdin:'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
             p.stdin.write(json.dumps(config).encode());p.stdin.close()
@@ -25,7 +27,7 @@ def probe(label):
                   '-fsS','--connect-timeout','8','--max-time','18']
             checks=[('foreign_204',['-o','/dev/null','-w','%{http_code}','https://www.gstatic.com/generate_204']),
                     ('foreign_ip',['https://api.ipify.org'])]
-            if label=='frontend':checks.append(('russian_ip',['https://2ip.ru']))
+            if label=='frontend':checks.append(('russian_ip',['https://internet.yandex.ru']))
             results={}
             for name,args in checks:
                 q=subprocess.run(base+args,capture_output=True,text=True,timeout=25)
@@ -37,7 +39,7 @@ def probe(label):
                     results[name]={'passed':q.returncode==0 and value==expected,'curl_code':q.returncode,
                                    'value':value if len(value)<64 else '[unexpected response]'}
             result={label+'_passed':all(r['passed'] for r in results.values()),'checks':results,
-                    'expected_egress':data['expected_egress'],'time':time.time(),
+                    'expected_egress':data['expected_egress'],'time':time.time(),'probe_location':role,
                     'wire_sha256':digest(json.dumps(data['outbound'],sort_keys=True).encode())}
             save('probe-'+label,result)
             return result
@@ -50,7 +52,7 @@ def probe(label):
 
 if __name__=='__main__':
     try:
-        p=argparse.ArgumentParser();p.add_argument('label',choices=['backend','frontend']);a=p.parse_args()
-        result=probe(a.label);print(json.dumps(result));sys.exit(0 if result[a.label+'_passed'] else 2)
+        p=argparse.ArgumentParser();p.add_argument('label',choices=['backend','frontend']);p.add_argument('--role',choices=['entry','panel'],default='entry');a=p.parse_args()
+        result=probe(a.label,a.role);print(json.dumps(result));sys.exit(0 if result[a.label+'_passed'] else 2)
     except Exception as e:
         print(json.dumps({'failed':True,'error':type(e).__name__,'detail':str(e) if isinstance(e,RuntimeError) else 'Inspect private state'}));sys.exit(1)
