@@ -62,13 +62,16 @@ else:
 '''
 
 
-def server_code():
+def server_code(target='at'):
+    targets = {'at': (('147.45.71.38', '2a12:5940:6020::2'), '147.45.71.38'),
+               'nl6': (('31.76.9.211',), '31.76.9.211')}
+    addresses, expected_egress = targets[target]
     # Reuse the published, reviewed isolated core lifetime/curl implementation.
     source = (REPO/'ops/cloud140-six-20260918/node_ops.py').read_text()
     run = source[source.index('def run('):source.index('\ndef context(')]
     probe = source[source.index('def listening('):source.index('\ndef traffic(')]
     probe = probe.replace("outbounds=[item['outbound']])", "outbounds=[item['outbound']] + item.get('extra_outbounds', []))")
-    return '''import sys,json,os,tempfile,subprocess,ipaddress,time,socket,hashlib
+    code = '''import sys,json,os,tempfile,subprocess,ipaddress,time,socket,hashlib
 from pathlib import Path
 payload=json.load(sys.stdin)
 addrs=json.loads(subprocess.check_output(['ip','-j','-4','addr','show']))
@@ -76,7 +79,7 @@ assert payload['entry'] in {a['local'] for i in addrs for a in i.get('addr_info'
 container=json.loads(subprocess.check_output(['docker','inspect','remnanode']))[0]
 assert container['HostConfig']['NetworkMode']=='host' and container['State']['Running']
 wire=payload['wire'];settings=wire['settings']
-assert (settings.get('address') or settings.get('vnext',[{}])[0].get('address')) in ('147.45.71.38','2a12:5940:6020::2')
+assert (settings.get('address') or settings.get('vnext',[{}])[0].get('address')) in APPROVED_TARGET_ADDRESSES
 class Helpers:
  @staticmethod
  def require(ok,msg):
@@ -97,19 +100,21 @@ with tempfile.TemporaryDirectory(prefix='ham-atnl6-probe-',dir='/root') as folde
  if payload['protocol']=='fragment':
   wire['streamSettings']['sockopt']={'dialerProxy':'fragment'}
   extra=[{'tag':'fragment','protocol':'freedom','settings':{'fragment':{'packets':'tlshello','length':'100-200','interval':'10-20'}},'streamSettings':{'sockopt':{'tcpNoDelay':True}}}]
- item={'id':'at-'+payload['protocol'],'outbound':wire,'extra_outbounds':extra,'expected_egress':'147.45.71.38'}
+ item={'id':APPROVED_TARGET_NAME+'-'+payload['protocol'],'outbound':wire,'extra_outbounds':extra,'expected_egress':APPROVED_EGRESS}
  result=one_probe(item,binary)
 print(json.dumps({'entry':payload['entry'],'result':result}))
 '''
+    return code.replace('APPROVED_TARGET_ADDRESSES', repr(addresses)).replace(
+        'APPROVED_TARGET_NAME', repr(target)).replace('APPROVED_EGRESS', repr(expected_egress))
 
 
-def remote_check(name, protocol, wire):
+def remote_check(name, protocol, wire, target='at'):
     ip = {'cloud': '176.108.245.140', 'aeza': '193.233.222.244', 'de182': '217.60.68.182'}[name]
     cmd = o.transport.command('entry') if name == 'cloud' else [
         'ssh', '-T', '-i', str(Path.home()/'.ssh/hamvpn-panel'), '-o', 'IdentitiesOnly=yes',
         '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'UpdateHostKeys=no',
         '-o', 'ConnectTimeout=12', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', 'root@'+ip]
-    command = ('sudo -n ' if name == 'cloud' else '') + o.encoded_command(server_code())
+    command = ('sudo -n ' if name == 'cloud' else '') + o.encoded_command(server_code(target))
     result = subprocess.run(cmd+[command], input=old.encoded(dict(entry=ip, protocol=protocol, wire=wire)),
                             capture_output=True, timeout=125)
     return dict(source=name, protocol=protocol, code=result.returncode,

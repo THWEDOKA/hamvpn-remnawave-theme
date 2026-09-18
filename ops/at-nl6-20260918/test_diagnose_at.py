@@ -40,6 +40,14 @@ class DiagnosticsTests(unittest.TestCase):
             d.remote_check('unapproved-target', 'reality', {})
         run.assert_not_called()
 
+    def test_nl6_has_independent_destination_guard(self):
+        code = d.server_code('nl6')
+        compile(code, '<nl6-probe>', 'exec')
+        self.assertIn("in ('31.76.9.211',)", code)
+        self.assertNotIn('147.45.71.38', code)
+        self.assertNotIn('2a12:5940:6020::2', code)
+        with self.assertRaises(KeyError): d.server_code('unapproved-exit')
+
 
 if __name__ == '__main__':
     unittest.main()
