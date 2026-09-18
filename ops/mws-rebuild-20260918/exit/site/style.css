@@ -1,0 +1,21 @@
+/* Reuse the US3 retro palette and type scale. No external resources or motion. */
+:root { color-scheme: light; --ink: #242424; --paper: #fffce8; --blue: #152f73; --type-ratio: 1.25; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 1rem; color: var(--ink); background: #d0d0ba; font: 1rem/1.5 Arial, sans-serif; }
+.page { max-width: 48rem; margin: auto; border: 4px ridge #77775f; background: var(--paper); overflow-wrap: anywhere; }
+header { border-bottom: 4px double var(--blue); }
+.masthead { padding: 1rem; color: var(--paper); background: var(--blue); font: bold 1.25rem/1.2 Georgia, serif; }
+nav { display: flex; flex-wrap: wrap; gap: .5rem; padding: 1rem; color: var(--blue); }
+nav a { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .5rem 1rem; border: 2px outset #77775f; background: #ece9d4; color: inherit; text-decoration: none; font-weight: bold; white-space: nowrap; flex-shrink: 0; }
+nav a:hover { background: var(--paper); }
+a:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+main { padding: 1.5rem; }
+h1, h2 { color: var(--blue); font-family: Georgia, serif; line-height: 1; margin-block: 0 2rem; text-wrap: balance; }
+h1 { font-size: clamp(1.953125rem, 5vw, 2.44140625rem); }
+h2 { font-size: 1.5625rem; }
+p { max-width: 65ch; margin-block: 1rem; }
+section { margin-top: 2rem; border-top: 1px solid #77775f; padding-block: 1.5rem; scroll-margin-top: 1rem; }
+footer { padding: 1rem; border-top: 4px double var(--blue); background: #ece9d4; }
+.skip { position: absolute; left: 1rem; top: -8rem; padding: .75rem; background: var(--paper); color: var(--blue); }
+.skip:focus { top: 1rem; z-index: 1; }
+@media (max-width: 30rem) { body { padding: .5rem; } main { padding: 1rem; } }
