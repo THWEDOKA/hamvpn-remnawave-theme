@@ -1,9 +1,9 @@
 """Scoped deployment helper requiring review; not a fallback decision/VPN proof.
 
-Only AT and GB-power, entry-initiated OpenSSH local forwarding to the EXISTING
+Only AT, PL, CZ and GB-power, entry-initiated SSH forwarding to the EXISTING
 REALITY backend. No API, Xray, firewall, DNS, certificate or package writes.
 
-CLI (root, exact published release, --id at|gbpower on every command):
+CLI (root, exact published release, --id at|pl|cz|gbpower on every command):
   ENTRY generate         < {"known_host":"EXIT_IP ssh-ed25519 PUBLIC_KEY"}
   ENTRY export-key       # PUBLIC JSON only, pipe to next command
   EXIT  install-identity < export-key JSON
@@ -12,6 +12,7 @@ CLI (root, exact published release, --id at|gbpower on every command):
   ENTRY verify           # read-only process/listener ownership inspection
   ENTRY recovery-test    # restarts ONLY this route's SSH service
   ENTRY rollback-entry   < fresh live-config readback supplied by coordinator
+  ENTRY cleanup-failed-start < same readback; never for a verified start
   EXIT  rollback-exit    < rollback-entry receipt
 
 The coordinator must separately prove authenticated VLESS 204 + expected egress
@@ -24,6 +25,9 @@ not independently fetched here. It must show no reference to this local port;
 active forwarding connections also prohibit rollback. The exit rollback
 requires the fresh entry stop receipt. Root-only keys/backups and a disabled,
 locked exit account are retained; no recursive removal or userdel is used.
+cleanup-failed-start additionally requires absence of started/recovered markers,
+no listener/consumers and exact unit/process ownership. It preserves the CURRENT
+unrelated service baseline, not an obsolete snapshot from the failed attempt.
 
 Every mutation has an immutable intent before the write. An interrupted
 generate/install/start/recovery/rollback is NOT retried or adopted. Inspect
@@ -51,6 +55,8 @@ ENTRY = '176.108.245.140'
 BACKEND = 15444
 ROUTES = {
     'at': dict(ip='147.45.71.38', port=21445, user='ham-c1406-at'),
+    'pl': dict(ip='31.77.59.141', port=21446, user='ham-c1406-pl'),
+    'cz': dict(ip='45.151.180.85', port=21447, user='ham-c1406-cz'),
     'gbpower': dict(ip='51.194.240.225', port=21448, user='ham-c1406-gbpower'),
 }
 STATE = Path('/root/hamvpn-cloud140-six-20260918/forward')
@@ -62,7 +68,7 @@ require = p.require
 
 
 def route(identifier):
-    require(identifier in ROUTES, 'Only approved AT/GB-power forwards allowed')
+    require(identifier in ROUTES, 'Only approved AT/PL/CZ/GB-power forwards allowed')
     return dict(id=identifier, **ROUTES[identifier])
 
 
@@ -554,6 +560,79 @@ def rollback_entry(n, request):
     return result
 
 
+def check_owned_process(n, pid):
+    require(type(pid) is int and pid > 1, 'Invalid live process identity')
+    root = Path('/proc') / str(pid)
+    require(root.joinpath('cmdline').read_bytes().rstrip(b'\0').decode().split('\0') == ssh_args(n),
+            'Failed-start process is not the exact owned SSH command')
+    require(os.readlink(root / 'exe') == '/usr/bin/ssh', 'Unexpected failed-start executable')
+    status = dict(line.split(':', 1) for line in root.joinpath('status').read_text().splitlines() if ':' in line)
+    require(status.get('Uid', '').split() == ['0', '0', '0', '0'], 'Unexpected failed-start process owner')
+
+
+def failed_start_state(n, s):
+    require(not any(s.exists(name) for name in ('started', 'recovered', 'recovery-intent', 'rollback-intent', 'rolled-back')),
+            'Only a never-verified failed start can be cleaned')
+    before = s.get('start-intent'); unit = paths(n)['unit']
+    require(before.get('id') == n['id'], 'Foreign failed-start intent')
+    secure(unit, 0o644)
+    require(unit.read_text() == before['unit'] == unit_text(n), 'Failed-start unit drift')
+    state = unit_info(unit.name)
+    require(state['LoadState'] == 'loaded' and state['FragmentPath'] == str(unit) and not state['DropInPaths'],
+            'Failed-start unit definition/overrides changed')
+    pid = int(state['MainPID'])
+    pair = state['ActiveState'], state['SubState']
+    if pair == ('active', 'running'):
+        check_owned_process(n, pid)
+    else:
+        require(pid == 0 and pair in (('activating', 'auto-restart'), ('failed', 'failed'), ('inactive', 'dead')),
+                'Unexpected failed-start systemd/process state')
+    require(not listener_lines(n), 'Listener exists; use verified rollback workflow')
+    no_connections(n)
+    return state
+
+
+def cleanup_failed_start(n, request):
+    """Stop a positively owned, unpublished failed attempt without verify()."""
+    guard(ENTRY); public = check_keys(n); detached(n, request)
+    s = store(n, 'entry'); unit = paths(n)['unit']; state = failed_start_state(n, s)
+    baseline = service_baseline()
+    require(absent(s.path / 'disabled-unit.conf'), 'Existing cleanup archive; inspect first')
+    s.put('rollback-intent', dict(mode='failed-start', before=state,
+        config_sha256=request['sha256'], current_services=baseline, timestamp=time.time()))
+    # Refuse a listener appearing between the read-only gate and stop. The
+    # immutable intent then requires explicit inspection, never a blind retry.
+    require(not listener_lines(n), 'Listener appeared during cleanup; inspect')
+    no_connections(n)
+    run(['systemctl', 'disable', '--now', unit.name])
+    stopped = unit_info(unit.name)
+    if stopped['ActiveState'] == 'failed' and stopped['MainPID'] == '0':
+        run(['systemctl', 'reset-failed', unit.name])
+        stopped = unit_info(unit.name)
+    require(stopped['ActiveState'] == 'inactive' and stopped['SubState'] == 'dead' and stopped['MainPID'] == '0',
+            'Failed-start process stop not confirmed')
+    require(not listener_lines(n), 'Listener remains after stopping owned unit')
+    no_connections(n)
+    secure(unit, 0o644)
+    require(unit.read_text() == s.get('start-intent')['unit'] == unit_text(n), 'Unit changed during cleanup')
+    # Copy-and-remove rather than cross-filesystem rename. Recovery bytes are
+    # fsynced/read back before unlinking only this exact root-owned unit file.
+    create(s.path / 'disabled-unit.conf', unit.read_bytes())
+    secure(unit, 0o644)
+    require(unit.read_text() == s.get('start-intent')['unit'], 'Unit changed before removal')
+    unit.unlink(); run(['systemctl', 'daemon-reload'])
+    final = unit_info(unit.name)
+    require(final['LoadState'] == 'not-found' and final['MainPID'] == '0', 'Unexpected remaining service definition/process')
+    require(not listener_lines(n), 'Listener reappeared after cleanup')
+    require(service_baseline() == baseline, 'Unrelated service/container changed during cleanup')
+    receipt = dict(id=n['id'], entry=ENTRY, exit=n['ip'], public_key_id=key_id(public), timestamp=time.time(),
+                   entry_service_stopped=True, entry_listener_absent=True,
+                   detached_config_sha256=request['sha256'], failed_start_cleaned=True,
+                   keys_and_identity_retained=True)
+    s.put('rolled-back', receipt)
+    return receipt
+
+
 def rollback_exit(n, receipt):
     verify_identity(n); s = store(n, 'exit'); before = s.get('identity-intent'); owner = s.get('account-created'); loc = paths(n)
     require(not s.exists('rollback-intent'), 'Existing/uncertain identity rollback')
@@ -581,7 +660,7 @@ def rollback_exit(n, receipt):
 
 def main():
     os.umask(0o077)
-    actions = ('generate', 'export-key', 'install-identity', 'verify-identity', 'start', 'verify', 'recovery-test', 'rollback-entry', 'rollback-exit')
+    actions = ('generate', 'export-key', 'install-identity', 'verify-identity', 'start', 'verify', 'recovery-test', 'rollback-entry', 'cleanup-failed-start', 'rollback-exit')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=actions); parser.add_argument('--id', required=True, choices=sorted(ROUTES))
     args = parser.parse_args(); n = route(args.id)
@@ -589,7 +668,7 @@ def main():
     side = 'exit' if args.action in ('install-identity', 'verify-identity', 'rollback-exit') else 'entry'
     guard(n['ip'] if side == 'exit' else ENTRY)
     s = store(n, side); s.secure()
-    # A shared lock serializes AT/GBP entry changes and any accidental overlap.
+    # A shared lock serializes selected entry changes and accidental overlap.
     lock_store = p.Store(STATE); lock_store.secure()
     fd = os.open(STATE / 'operation.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'rb') as lock:
@@ -598,7 +677,7 @@ def main():
                 and info.st_nlink == 1, 'Unsafe operation lock')
         fcntl.flock(lock, fcntl.LOCK_EX)
         handler = globals()[args.action.replace('-', '_')]
-        result = handler(n, json.load(sys.stdin)) if args.action in ('generate', 'install-identity', 'start', 'rollback-entry', 'rollback-exit') else handler(n)
+        result = handler(n, json.load(sys.stdin)) if args.action in ('generate', 'install-identity', 'start', 'rollback-entry', 'cleanup-failed-start', 'rollback-exit') else handler(n)
     print(json.dumps(result))
 
 

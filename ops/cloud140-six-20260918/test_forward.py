@@ -1,9 +1,11 @@
 """Offline only: no SSH, users, systemd, key generation or server writes."""
 import base64
 from copy import deepcopy
+from contextlib import ExitStack, contextmanager
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
@@ -39,20 +41,23 @@ class ForwardTests(unittest.TestCase):
         config = config or {'inbounds': [], 'outbounds': [{'protocol': 'freedom'}]}
         return dict(id='at', entry=f.ENTRY, timestamp=f.time.time(), source='installed-entry-xray', config=config, sha256=f.p.digest(config))
 
-    def test_exact_two_routes(self):
-        self.assertEqual(set(f.ROUTES), {'at', 'gbpower'})
+    def test_exact_four_routes(self):
+        self.assertEqual(set(f.ROUTES), {'at', 'pl', 'cz', 'gbpower'})
         self.assertEqual(f.route('at')['port'], 21445)
         self.assertEqual(f.route('gbpower')['port'], 21448)
         self.assertEqual(f.route('gbpower')['ip'], '51.194.240.225')
+        self.assertEqual(f.route('cz'), dict(id='cz', ip='45.151.180.85', port=21447, user='ham-c1406-cz'))
+        self.assertEqual(f.route('pl'), dict(id='pl', ip='31.77.59.141', port=21446, user='ham-c1406-pl'))
 
     def test_unknown_withdrawn_routes_rejected(self):
-        for value in ('pl', 'cz', 'gb', 'us1', '../../root', ''):
+        for value in ('gb', 'us1', '../../root', ''):
             with self.subTest(value=value), self.assertRaises(RuntimeError): f.route(value)
 
     def test_distinct_route_paths_users(self):
-        a, b = [f.route(x) for x in ('at', 'gbpower')]
-        self.assertNotEqual(a['user'], b['user'])
-        for key in f.paths(a): self.assertNotEqual(f.paths(a)[key], f.paths(b)[key])
+        nodes = [f.route(x) for x in f.ROUTES]
+        self.assertEqual(len({n['user'] for n in nodes}), 4)
+        self.assertEqual(len({n['port'] for n in nodes}), 4)
+        for key in f.paths(nodes[0]): self.assertEqual(len({f.paths(n)[key] for n in nodes}), 4)
 
     def test_public_wire_encoding(self):
         self.assertEqual(len(f.public_blob(KEY)), 51)
@@ -248,6 +253,143 @@ class ForwardTests(unittest.TestCase):
     def test_fixed_expected_reality_backend_never_changed(self):
         self.assertEqual(f.BACKEND, 15444)
         self.assertNotEqual(f.ROUTES['gbpower']['ip'], '51.194.240.214')
+
+
+class FailedStartTests(unittest.TestCase):
+    """Mock operating-system effects; exercise all cleanup gates and ordering."""
+    setUp = ForwardTests.setUp
+    detach_proof = ForwardTests.detach_proof
+    @contextmanager
+    def environment(self, pair=('active', 'running'), pid='42'):
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            loc = f.paths(self.n); loc['unit'] = Path(directory) / 'owned.service'
+            stack.enter_context(patch.object(f, 'paths', return_value=loc))
+            loc['unit'].write_text(f.unit_text(self.n))
+            memory = MemoryStore({'start-intent': dict(id='at', unit=f.unit_text(self.n), baseline={'old': 'not restored'})})
+            memory.path = Path(directory) / 'state'; memory.path.mkdir()
+            first = dict(LoadState='loaded', ActiveState=pair[0], SubState=pair[1], MainPID=pid,
+                         FragmentPath=str(loc['unit']), DropInPaths='')
+            stopped = dict(first, ActiveState='inactive', SubState='dead', MainPID='0')
+            removed = dict(stopped, LoadState='not-found', FragmentPath='')
+            mocks = {}
+            for name, value in [('guard', None), ('check_keys', KEY), ('store', memory), ('secure', None),
+                                ('check_owned_process', None), ('listener_lines', []), ('no_connections', None),
+                                ('service_baseline', {'current': 'preserved'}), ('run', None)]:
+                mocks[name] = stack.enter_context(patch.object(f, name, return_value=value))
+            mocks['unit_info'] = stack.enter_context(patch.object(f, 'unit_info', side_effect=[first, stopped, removed]))
+            mocks['create'] = stack.enter_context(patch.object(f, 'create', side_effect=lambda path, data: path.write_bytes(data)))
+            yield memory, loc, mocks, first, stopped, removed
+
+    def test_failed_cleanup_stops_only_owned_unit_and_preserves_recovery(self):
+        with self.environment() as (memory, loc, mocks, first, stopped, removed):
+            result = f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertTrue(result['failed_start_cleaned'])
+            self.assertTrue(result['entry_service_stopped'])
+            self.assertTrue(result['keys_and_identity_retained'])
+            self.assertFalse(loc['unit'].exists())
+            self.assertEqual((memory.path / 'disabled-unit.conf').read_text(), f.unit_text(self.n))
+            self.assertEqual(memory.get('rollback-intent')['current_services'], {'current': 'preserved'})
+            self.assertEqual([x.args[0] for x in mocks['run'].call_args_list],
+                             [['systemctl', 'disable', '--now', 'owned.service'], ['systemctl', 'daemon-reload']])
+            mocks['check_owned_process'].assert_called_once_with(self.n, 42)
+
+    def test_cleanup_failed_and_auto_restart_states_without_pid(self):
+        for pair in [('activating', 'auto-restart'), ('failed', 'failed'), ('inactive', 'dead')]:
+            with self.subTest(pair=pair), self.environment(pair=pair, pid='0') as (memory, loc, mocks, *_):
+                self.assertTrue(f.cleanup_failed_start(self.n, self.detach_proof())['failed_start_cleaned'])
+                mocks['check_owned_process'].assert_not_called()
+
+    def test_cleanup_clears_only_own_failed_state_after_stop(self):
+        with self.environment() as (memory, loc, mocks, first, stopped, removed):
+            mocks['unit_info'].side_effect = [first, dict(stopped, ActiveState='failed', SubState='failed'), stopped, removed]
+            f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertIn(['systemctl', 'reset-failed', 'owned.service'], [x.args[0] for x in mocks['run'].call_args_list])
+
+    def test_verified_or_uncertain_cleanup_cannot_be_reused(self):
+        for marker in ('started', 'recovered', 'recovery-intent', 'rollback-intent', 'rolled-back'):
+            with self.subTest(marker=marker), self.environment() as (memory, loc, mocks, *_):
+                memory.put(marker, {})
+                with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+                mocks['run'].assert_not_called(); mocks['create'].assert_not_called()
+                self.assertTrue(loc['unit'].exists())
+
+    def test_cleanup_rejects_listener_before_any_mutation(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            mocks['listener_lines'].return_value = ['LISTEN exists']
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertFalse(memory.exists('rollback-intent')); mocks['run'].assert_not_called()
+
+    def test_cleanup_rejects_active_consumers(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            mocks['no_connections'].side_effect = RuntimeError('consumer')
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertFalse(memory.exists('rollback-intent')); mocks['run'].assert_not_called()
+
+    def test_cleanup_rejects_config_consumer(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            request = self.detach_proof({'outbounds': [{'address': '127.0.0.1', 'port': 21445}]})
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, request)
+            self.assertFalse(memory.exists('rollback-intent')); mocks['run'].assert_not_called()
+
+    def test_cleanup_rejects_foreign_unit_or_override(self):
+        for mode in ('file', 'dropin', 'fragment', 'intent'):
+            with self.subTest(mode=mode), self.environment() as (memory, loc, mocks, first, *_):
+                if mode == 'file': loc['unit'].write_text('foreign')
+                elif mode == 'dropin': first['DropInPaths'] = '/some/override'
+                elif mode == 'fragment': first['FragmentPath'] = '/other/service'
+                else: memory.data['start-intent']['id'] = 'gbpower'
+                with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+                self.assertFalse(memory.exists('rollback-intent')); mocks['run'].assert_not_called()
+
+    def test_cleanup_rejects_unknown_pid_or_state(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            mocks['check_owned_process'].side_effect = RuntimeError('foreign process')
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            mocks['run'].assert_not_called()
+        with self.environment(pair=('deactivating', 'stop-sigterm')) as (memory, loc, mocks, *_):
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            mocks['run'].assert_not_called()
+
+    def test_listener_race_stops_after_intent_without_touching_service(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            mocks['listener_lines'].side_effect = [[], ['new listener']]
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertTrue(memory.exists('rollback-intent')); mocks['run'].assert_not_called()
+            self.assertTrue(loc['unit'].exists())
+
+    def test_failed_stop_does_not_remove_unit(self):
+        with self.environment() as (memory, loc, mocks, first, stopped, removed):
+            mocks['unit_info'].side_effect = [first, first]
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertTrue(loc['unit'].exists()); mocks['create'].assert_not_called()
+            self.assertFalse(memory.exists('rolled-back'))
+
+    def test_cleanup_baseline_drift_is_not_claimed_success(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            mocks['service_baseline'].side_effect = [{'current': 1}, {'current': 2}]
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, self.detach_proof())
+            self.assertFalse(memory.exists('rolled-back'))
+
+    def test_cleanup_proof_stale_stops_before_systemd(self):
+        with self.environment() as (memory, loc, mocks, *_):
+            request = self.detach_proof(); request['timestamp'] -= 121
+            with self.assertRaises(RuntimeError): f.cleanup_failed_start(self.n, request)
+            mocks['run'].assert_not_called()
+
+    @patch.object(f.Path, 'read_text')
+    @patch.object(f.os, 'readlink', return_value='/usr/bin/ssh')
+    @patch.object(f.Path, 'read_bytes')
+    def test_owned_process_exact_executable_args_and_root_uid(self, read_bytes, readlink, read_text):
+        read_bytes.return_value = ('\0'.join(f.ssh_args(self.n)) + '\0').encode()
+        read_text.return_value = 'Uid:\t0\t0\t0\t0\n'
+        f.check_owned_process(self.n, 42)
+        read_bytes.return_value = b'foreign\0'
+        with self.assertRaises(RuntimeError): f.check_owned_process(self.n, 42)
+        read_bytes.return_value = ('\0'.join(f.ssh_args(self.n)) + '\0').encode()
+        readlink.return_value = '/tmp/ssh'
+        with self.assertRaises(RuntimeError): f.check_owned_process(self.n, 42)
+        readlink.return_value = '/usr/bin/ssh'; read_text.return_value = 'Uid:\t1000\t1000\t1000\t1000\n'
+        with self.assertRaises(RuntimeError): f.check_owned_process(self.n, 42)
 
 
 if __name__ == '__main__': unittest.main()
