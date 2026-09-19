@@ -60,8 +60,10 @@ async def measure(engine, source, members):
             }
         )
         assert not config.get("listeners")
-        command, check = ["mihomo", "-f"], ["mihomo", "-t", "-f"]
     with tempfile.TemporaryDirectory(prefix="ham-auto-visible-") as directory:
+        if engine == "mihomo":
+            command = ["mihomo", "-d", directory, "-f"]
+            check = ["mihomo", "-t", "-d", directory, "-f"]
         path = Path(directory) / "config.json"
         path.write_text(json.dumps(config))
         os.chmod(path, 0o600)
