@@ -1,4 +1,11 @@
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS probe-builder
+COPY download_probe_cores.py /download_probe_cores.py
+RUN python /download_probe_cores.py
+
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision="$VCS_REF"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -11,6 +18,7 @@ RUN pip install --disable-pip-version-check -r /app/requirements.txt \
     && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin infrastructure
 
 COPY app /app/app
+COPY --from=probe-builder /probe-cores/ /usr/local/bin/
 
 USER 10001:10001
 EXPOSE 8090

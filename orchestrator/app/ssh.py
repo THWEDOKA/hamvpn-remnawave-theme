@@ -44,7 +44,13 @@ class SshSession:
     def __init__(self, credentials: SshCredentials, expected_fingerprint: str | None = None):
         self.credentials = credentials
         self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        class PinnedPolicy(paramiko.MissingHostKeyPolicy):
+            def missing_host_key(self, client, hostname, key):
+                actual = "SHA256:" + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
+                if expected_fingerprint and actual != expected_fingerprint:
+                    raise paramiko.SSHException("SSH host key differs from preflight")
+
+        self.client.set_missing_host_key_policy(PinnedPolicy())
         connect: dict[str, Any] = {
             "hostname": credentials.host,
             "port": credentials.port,
@@ -64,6 +70,7 @@ class SshSession:
         try:
             self.client.connect(**connect)
         except (paramiko.SSHException, OSError) as error:
+            self.client.close()
             raise SshError("Не удалось подключиться к серверу по SSH") from error
         self.fingerprint = self._fingerprint()
         if expected_fingerprint and self.fingerprint != expected_fingerprint:
@@ -140,7 +147,7 @@ def preflight(credentials: SshCredentials) -> dict[str, Any]:
         disk = session.run("df -Pk / | awk 'NR==2 {print $4}'")
         if int(disk or 0) < 2_000_000:
             raise SshError("На сервере меньше 2 ГБ свободного места")
-        occupied = session.run("test -e /opt/remnanode/docker-compose.yml && echo yes || echo no")
+        occupied = session.run("if test -e /opt/remnanode || docker inspect remnanode >/dev/null 2>&1; then echo yes; else echo no; fi")
         docker = session.run("command -v docker >/dev/null 2>&1 && docker --version || true", check=False)
         return {
             "fingerprint": session.fingerprint,
@@ -186,9 +193,11 @@ def install_node(
     if not panel_ip:
         raise SshError("Не настроен публичный IP панели для файрвола")
     with SshSession(credentials, expected_fingerprint) as session:
-        exists = session.run("test -e /opt/remnanode/docker-compose.yml && echo yes || echo no")
+        exists = session.run("if test -e /opt/remnanode || docker inspect remnanode >/dev/null 2>&1; then echo yes; else echo no; fi")
         if exists == "yes":
-            raise SshError("На сервере уже есть /opt/remnanode; автоматическая перезапись запрещена")
+            raise SshError("На сервере уже есть Remnawave Node или /opt/remnanode; автоматическая перезапись запрещена")
+        if session.run("iptables -S HAMVPN_NODE >/dev/null 2>&1 && echo yes || echo no") == "yes":
+            raise SshError("Цепочка HAMVPN_NODE уже существует; требуется сверка владельца")
         panel = shlex.quote(panel_ip)
         port = shlex.quote(str(node_port))
         try:
@@ -227,7 +236,8 @@ def install_node(
                 raise SshError("Контейнер Remnawave Node не запустился")
             image_id = session.run("docker inspect -f '{{.Image}}' remnanode")
             session.run("chmod 600 /opt/remnanode/docker-compose.yml")
-            return {"fingerprint": session.fingerprint, "imageId": image_id, "container": "running"}
+            return {"fingerprint": session.fingerprint, "imageId": image_id, "container": "running",
+                    "composeHash": hashlib.sha256(_compose(node_port, secret_key, node_image).encode()).hexdigest()}
         except Exception:
             session.run("cd /opt/remnanode && docker compose down 2>/dev/null || true", check=False)
             session.run(f"iptables -D INPUT -p tcp --dport {port} -j HAMVPN_NODE 2>/dev/null || true", check=False)
@@ -236,10 +246,42 @@ def install_node(
             raise
 
 
-def rollback_install(credentials: SshCredentials, expected_fingerprint: str, node_port: int) -> None:
+def rollback_install(credentials: SshCredentials, expected_fingerprint: str, node_port: int,
+                     expected_compose_hash: str | None = None) -> None:
     with SshSession(credentials, expected_fingerprint) as session:
+        if expected_compose_hash:
+            actual = session.run("sha256sum /opt/remnanode/docker-compose.yml").split()[0]
+            if actual != expected_compose_hash:
+                raise SshError("Файл ноды изменён после установки; автоматическое удаление остановлено")
         port = shlex.quote(str(node_port))
         session.run("cd /opt/remnanode && docker compose down || true", check=False)
         session.run(f"iptables -D INPUT -p tcp --dport {port} -j HAMVPN_NODE 2>/dev/null || true", check=False)
         session.run("iptables -F HAMVPN_NODE 2>/dev/null || true; iptables -X HAMVPN_NODE 2>/dev/null || true", check=False)
         session.run("rm -f /opt/remnanode/docker-compose.yml; rmdir /opt/remnanode 2>/dev/null || true", check=False)
+        session.run("if command -v netfilter-persistent >/dev/null 2>&1; then netfilter-persistent save; "
+                    "elif test -d /etc/iptables; then iptables-save > /etc/iptables/rules.v4; fi", check=False)
+
+
+def check_xray(credentials: SshCredentials, fingerprint: str, config: dict, identifier: str,
+               free_port: int | None = None) -> None:
+    from uuid import UUID
+    name = str(UUID(identifier))
+    if not fingerprint:
+        raise SshError("Сначала выполните SSH-проверку")
+    with SshSession(credentials, fingerprint) as session:
+        if session.run("id -u") != "0":
+            raise SshError("Для проверки конфигурации нужен root")
+        if free_port is not None:
+            occupied = session.run(f"ss -H -lnt 'sport = :{int(free_port)}'")
+            if occupied:
+                raise SshError("Выбранный TCP-порт уже занят на сервере")
+        path = "/tmp/ham-infra-" + name + ".json"
+        inside = "/tmp/ham-infra-" + name + ".json"
+        try:
+            session.upload(path, json.dumps(config))
+            session.run(f"docker cp {path} remnanode:{inside}")
+            status = session.run(f"docker exec remnanode xray run -test -config {inside} >/dev/null 2>&1; printf '%s' $?")
+            if status != "0":
+                raise SshError("Установленное ядро Xray отклонило конфигурацию")
+        finally:
+            session.run(f"rm -f {path}; docker exec remnanode rm -f {inside} >/dev/null 2>&1", check=False)

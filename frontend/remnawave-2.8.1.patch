@@ -71,12 +71,556 @@ index fed8476359a60db75c67a4002dc7bde87afda064..339f16a0128489275b4907db24df25d4
  
                          <Route
                              element={<NodesBandwidthTablePageConnector />}
+diff --git a/src/pages/dashboard/infrastructure/gconfig.view.tsx b/src/pages/dashboard/infrastructure/gconfig.view.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a0202386d918
+--- /dev/null
++++ b/src/pages/dashboard/infrastructure/gconfig.view.tsx
+@@ -0,0 +1,538 @@
++import {
++    Alert,
++    Badge,
++    Button,
++    Code,
++    Divider,
++    Fieldset,
++    Group,
++    MultiSelect,
++    NumberInput,
++    Paper,
++    PasswordInput,
++    Select,
++    SimpleGrid,
++    Stack,
++    Text,
++    Textarea,
++    TextInput,
++    Title
++} from '@mantine/core'
++import { notifications } from '@mantine/notifications'
++import axios from 'axios'
++import { useEffect, useState } from 'react'
++
++type Ssh = { host: string; port: number; username: string; password: string; privateKey: string }
++type Check = { fingerprint: string; existingNode: boolean }
++type Proof = { engine: string; httpsRequests: number; egress: string; delayMs: number | null }
++type ManagedNode = {
++    id: string
++    name: string
++    address: string
++    mode: 'direct' | 'ru'
++    warning?: string
++    route: { entryUuid: string; entryName: string; address: string; port: number } | null
++    lastProof: Proof[]
++    verifiedAt: string
++}
++type Entry = { uuid: string; name: string; address: string; ready: boolean; reason: string }
++type Data = { nodes: ManagedNode[]; entries: Entry[]; templateAvailable: boolean }
++type Plan = { operationId: string; name: string; address: string; sni: string }
++const emptySsh = (): Ssh => ({ host: '', port: 22, username: 'root', password: '', privateKey: '' })
++
++function message(error: unknown) {
++    if (axios.isAxiosError(error))
++        return String(
++            error.response?.data?.detail ||
++                'Сервис не ответил. Проверьте журнал перед повторным запуском.'
++        )
++    return error instanceof Error ? error.message : 'Операция не выполнена'
++}
++
++function SshFields({ value, onChange }: { value: Ssh; onChange: (value: Ssh) => void }) {
++    return (
++        <Stack gap="sm">
++            <Text size="sm">SSH · {value.host || 'укажите IP сервера'}</Text>
++            <SimpleGrid cols={2}>
++                <TextInput
++                    label="Пользователь SSH"
++                    value={value.username}
++                    onChange={(e) => onChange({ ...value, username: e.currentTarget.value })}
++                />
++                <NumberInput
++                    label="Порт SSH"
++                    min={1}
++                    max={65535}
++                    value={value.port}
++                    onChange={(v) => onChange({ ...value, port: Number(v) })}
++                />
++            </SimpleGrid>
++            <PasswordInput
++                autoComplete="new-password"
++                label="Пароль SSH"
++                value={value.password}
++                onChange={(e) =>
++                    onChange({ ...value, password: e.currentTarget.value, privateKey: '' })
++                }
++            />
++            <Textarea
++                label="Или приватный SSH-ключ"
++                autosize
++                minRows={2}
++                maxRows={5}
++                value={value.privateKey}
++                onChange={(e) =>
++                    onChange({ ...value, privateKey: e.currentTarget.value, password: '' })
++                }
++            />
++            <Text c="dimmed" size="xs">
++                Пароль и ключ используются для этой операции и не сохраняются в панели.
++            </Text>
++        </Stack>
++    )
++}
++
++export function GconfigView({
++    token,
++    squads,
++    onComplete
++}: {
++    token: string
++    squads: { uuid: string; name: string }[]
++    onComplete: () => void
++}) {
++    const [data, setData] = useState<Data | null>(null)
++    const [error, setError] = useState('')
++    const [busy, setBusy] = useState('')
++    const [name, setName] = useState('')
++    const [address, setAddress] = useState('')
++    const [countryCode, setCountryCode] = useState('')
++    const [squadUuids, setSquadUuids] = useState<string[]>([])
++    const [selfSteal, setSelfSteal] = useState<string | null>(null)
++    const [ssh, setSsh] = useState<Ssh>(emptySsh)
++    const [sshCheck, setSshCheck] = useState<Check | null>(null)
++    const [plan, setPlan] = useState<Plan | null>(null)
++    const [confirmation, setConfirmation] = useState('')
++    const [selected, setSelected] = useState<string | null>(null)
++    const [entryUuid, setEntryUuid] = useState<string | null>(null)
++    const [entrySsh, setEntrySsh] = useState<Ssh>(emptySsh)
++    const [entryCheck, setEntryCheck] = useState<Check | null>(null)
++    const [port, setPort] = useState(19443)
++    const node = data?.nodes.find((n) => n.id === selected)
++
++    const api = async <T,>(path: string, body?: unknown): Promise<T> => {
++        const response = await axios.request<T>({
++            url: '/ham-infrastructure/api' + path,
++            method: body === undefined ? 'GET' : 'POST',
++            data: body,
++            headers: { Authorization: `Bearer ${token}` },
++            timeout: 590_000
++        })
++        return response.data
++    }
++    const refresh = async () => setData(await api<Data>('/gconfig'))
++    useEffect(() => {
++        let cancelled = false
++        axios
++            .get<Data>('/ham-infrastructure/api/gconfig', {
++                headers: { Authorization: `Bearer ${token}` }
++            })
++            .then((r) => {
++                if (!cancelled) setData(r.data)
++            })
++            .catch((e) => {
++                if (!cancelled) setError(message(e))
++            })
++        return () => {
++            cancelled = true
++        }
++    }, [token])
++
++    const run = async (label: string, work: () => Promise<void>) => {
++        setBusy(label)
++        setError('')
++        try {
++            await work()
++        } catch (e) {
++            setError(message(e))
++        } finally {
++            setBusy('')
++            onComplete()
++        }
++    }
++    const check = (entry: boolean) =>
++        run('Проверяем SSH', async () => {
++            const result = await api<Check>('/node-add/ssh-preflight', {
++                ssh: entry ? entrySsh : ssh
++            })
++            if (entry ? !result.existingNode : result.existingNode)
++                throw new Error(
++                    entry
++                        ? 'На входе не найдена Remnawave Node'
++                        : 'На сервере уже есть Remnawave Node. Мастер устанавливает только новые ноды.'
++                )
++            if (entry) setEntryCheck(result)
++            else setSshCheck(result)
++        })
++    const buildPlan = () =>
++        run('Готовим план', async () => {
++            setPlan(
++                await api<Plan>('/gconfig/plan', {
++                    name,
++                    address,
++                    countryCode,
++                    squadUuids,
++                    selfSteal
++                })
++            )
++            setConfirmation('')
++        })
++    const install = () =>
++        run('Устанавливаем и проверяем новую ноду', async () => {
++            if (!plan || !sshCheck) return
++            try {
++                const result = await api<ManagedNode>('/gconfig/install', {
++                    operationId: plan.operationId,
++                    confirmation,
++                    ssh,
++                    expectedFingerprint: sshCheck.fingerprint
++                })
++                setSelected(result.id)
++                setPlan(null)
++                setConfirmation('')
++                await refresh()
++                notifications.show({
++                    color: 'teal',
++                    message: 'Нода установлена. Подписки Xray и mihomo прошли проверки.'
++                })
++            } finally {
++                setSsh((v) => ({ ...v, password: '', privateKey: '' }))
++                setSshCheck(null)
++            }
++        })
++    const prepare = () =>
++        run('Готовим и проверяем российский маршрут', async () => {
++            if (!node || !entryCheck) return
++            try {
++                await api('/gconfig/route/prepare', {
++                    id: node.id,
++                    entryUuid,
++                    port,
++                    ssh: entrySsh,
++                    expectedFingerprint: entryCheck.fingerprint
++                })
++                await refresh()
++                notifications.show({
++                    color: 'teal',
++                    message: 'Пара серверов проверена. Нода пока доступна напрямую.'
++                })
++            } finally {
++                setEntrySsh((v) => ({ ...v, password: '', privateKey: '' }))
++                setEntryCheck(null)
++            }
++        })
++    const switchRoute = () =>
++        run('Проверяем и переключаем маршрут', async () => {
++            if (!node) return
++            await api('/gconfig/route/switch', {
++                id: node.id,
++                mode: node.mode === 'direct' ? 'ru' : 'direct'
++            })
++            await refresh()
++            notifications.show({
++                color: 'teal',
++                message: 'Маршрут изменён и проверен. Обновите подписку на устройствах.'
++            })
++        })
++
++    return (
++        <Stack>
++            {error && (
++                <Alert color="red" title="Операция остановлена">
++                    {error}
++                </Alert>
++            )}
++            {busy && (
++                <Alert color="blue" title={busy}>
++                    Операция может занять несколько минут. Результат сохраняется в журнале.
++                </Alert>
++            )}
++            <SimpleGrid cols={{ base: 1, lg: 2 }}>
++                <Paper p="lg" withBorder radius="md">
++                    <Fieldset disabled={!!busy} variant="unstyled">
++                        <Stack>
++                            <Title order={4}>Установить зарубежную ноду</Title>
++                            <Select
++                                label="Конфигурация"
++                                data={['G-CONFIG']}
++                                value="G-CONFIG"
++                                readOnly
++                            />
++                            <Text size="sm" c="dimmed">
++                                Отдельный профиль и ключи для нового сервера. Клиентские проверки
++                                выполняются до публикации в выбранных сквадах.
++                            </Text>
++                            {data && !data.templateAvailable && (
++                                <Alert color="yellow">В панели отсутствует профиль G-CONFIG.</Alert>
++                            )}
++                            <TextInput
++                                label="Имя ноды"
++                                maxLength={24}
++                                value={name}
++                                onChange={(e) => {
++                                    setName(e.currentTarget.value)
++                                    setPlan(null)
++                                }}
++                            />
++                            <SimpleGrid cols={2}>
++                                <TextInput
++                                    label="Публичный IPv4"
++                                    value={address}
++                                    onChange={(e) => {
++                                        const v = e.currentTarget.value.trim()
++                                        setAddress(v)
++                                        setSsh((s) => ({ ...s, host: v }))
++                                        setSshCheck(null)
++                                        setPlan(null)
++                                    }}
++                                />
++                                <TextInput
++                                    label="Код страны"
++                                    placeholder="NL"
++                                    maxLength={2}
++                                    value={countryCode}
++                                    onChange={(e) => {
++                                        setCountryCode(e.currentTarget.value.toUpperCase())
++                                        setPlan(null)
++                                    }}
++                                />
++                            </SimpleGrid>
++                            <MultiSelect
++                                label="Сквады с доступом"
++                                data={squads.map((s) => ({ value: s.uuid, label: s.name }))}
++                                value={squadUuids}
++                                onChange={(v) => {
++                                    setSquadUuids(v)
++                                    setPlan(null)
++                                }}
++                                searchable
++                            />
++                            <Select
++                                label="Self-steal — свой домен, HTTPS-сайт и сертификат?"
++                                data={[
++                                    { value: 'no', label: 'Нет — внешний target из G-CONFIG' },
++                                    { value: 'yes', label: 'Да — нужна отдельная настройка сайта' }
++                                ]}
++                                value={selfSteal}
++                                onChange={(v) => {
++                                    setSelfSteal(v)
++                                    setPlan(null)
++                                }}
++                            />
++                            {selfSteal === 'yes' && (
++                                <Alert color="yellow">
++                                    Этот мастер устанавливает G-CONFIG с внешним target. Для
++                                    self-steal сначала требуется отдельная настройка домена, сайта и
++                                    сертификата.
++                                </Alert>
++                            )}
++                            <SshFields
++                                value={ssh}
++                                onChange={(v) => {
++                                    setSsh(v)
++                                    setSshCheck(null)
++                                }}
++                            />
++                            <Button
++                                variant="light"
++                                disabled={!address || (!ssh.password && !ssh.privateKey)}
++                                onClick={() => void check(false)}
++                            >
++                                Проверить SSH
++                            </Button>
++                            {sshCheck && (
++                                <Text size="xs" c="dimmed">
++                                    Ключ сервера: <Code>{sshCheck.fingerprint}</Code>
++                                </Text>
++                            )}
++                            <Button
++                                disabled={
++                                    !sshCheck || selfSteal !== 'no' || !data?.templateAvailable
++                                }
++                                onClick={() => void buildPlan()}
++                            >
++                                Подготовить установку
++                            </Button>
++                            {plan && (
++                                <>
++                                    <Divider />
++                                    <Text fw={600}>
++                                        {plan.name} · {plan.address}:443
++                                    </Text>
++                                    <Text size="sm">
++                                        VLESS / REALITY / Vision · SNI {plan.sni} · Firefox. Общий
++                                        G-CONFIG сохраняется.
++                                    </Text>
++                                    <TextInput
++                                        label={`Введите имя ноды: ${plan.name}`}
++                                        value={confirmation}
++                                        onChange={(e) => setConfirmation(e.currentTarget.value)}
++                                    />
++                                    <Button
++                                        disabled={confirmation !== plan.name || !sshCheck}
++                                        onClick={() => void install()}
++                                    >
++                                        Установить и проверить
++                                    </Button>
++                                </>
++                            )}
++                        </Stack>
++                    </Fieldset>
++                </Paper>
++                <Paper p="lg" withBorder radius="md">
++                    <Fieldset disabled={!!busy} variant="unstyled">
++                        <Stack>
++                            <Group justify="space-between">
++                                <Title order={4}>Напрямую / через РФ</Title>
++                                <Button
++                                    size="xs"
++                                    variant="subtle"
++                                    onClick={() => void run('Обновляем состояние', refresh)}
++                                >
++                                    Обновить
++                                </Button>
++                            </Group>
++                            <Text size="sm" c="dimmed">
++                                Российский вход передаёт TCP к зарубежной ноде. После смены адреса
++                                устройствам нужно обновить подписку.
++                            </Text>
++                            <Select
++                                label="Нода из этого мастера"
++                                placeholder={
++                                    data?.nodes.length
++                                        ? 'Выберите ноду'
++                                        : 'Сначала установите ноду слева'
++                                }
++                                data={(data?.nodes || []).map((n) => ({
++                                    value: n.id,
++                                    label: n.name
++                                }))}
++                                value={selected}
++                                onChange={(v) => {
++                                    setSelected(v)
++                                    setEntryUuid(null)
++                                    setEntryCheck(null)
++                                    setEntrySsh(emptySsh())
++                                }}
++                                searchable
++                            />
++                            {node && (
++                                <>
++                                    <Group>
++                                        <Badge color={node.mode === 'ru' ? 'violet' : 'blue'}>
++                                            {node.mode === 'ru' ? 'Через РФ' : 'Напрямую'}
++                                        </Badge>
++                                        <Text size="sm">Выход: {node.address}</Text>
++                                    </Group>
++                                    {node.warning && <Alert color="yellow">{node.warning}</Alert>}
++                                    {node.route ? (
++                                        <>
++                                            <Text size="sm">
++                                                Вход: {node.route.entryName} · {node.route.address}:
++                                                {node.route.port}
++                                            </Text>
++                                            <Button
++                                                disabled={!!node.warning}
++                                                onClick={() => void switchRoute()}
++                                            >
++                                                {node.mode === 'direct'
++                                                    ? 'Переключить через РФ'
++                                                    : 'Вернуть напрямую'}
++                                            </Button>
++                                        </>
++                                    ) : (
++                                        <>
++                                            <Select
++                                                label="Российский вход"
++                                                data={(data?.entries || []).map((e) => ({
++                                                    value: e.uuid,
++                                                    label: `${e.name} · ${e.address}${e.reason ? ' · ' + e.reason : ''}`,
++                                                    disabled: !e.ready
++                                                }))}
++                                                value={entryUuid}
++                                                onChange={(v) => {
++                                                    setEntryUuid(v)
++                                                    setEntryCheck(null)
++                                                    setEntrySsh({
++                                                        ...emptySsh(),
++                                                        host:
++                                                            data?.entries.find((e) => e.uuid === v)
++                                                                ?.address || ''
++                                                    })
++                                                }}
++                                                searchable
++                                            />
++                                            <NumberInput
++                                                label="Свободный TCP-порт входа"
++                                                min={1024}
++                                                max={65535}
++                                                value={port}
++                                                onChange={(v) => setPort(Number(v))}
++                                            />
++                                            <SshFields
++                                                value={entrySsh}
++                                                onChange={(v) => {
++                                                    setEntrySsh(v)
++                                                    setEntryCheck(null)
++                                                }}
++                                            />
++                                            <Button
++                                                variant="light"
++                                                disabled={
++                                                    !entryUuid ||
++                                                    (!entrySsh.password && !entrySsh.privateKey)
++                                                }
++                                                onClick={() => void check(true)}
++                                            >
++                                                Проверить SSH входа
++                                            </Button>
++                                            {entryCheck && (
++                                                <Text size="xs" c="dimmed">
++                                                    Ключ входа:{' '}
++                                                    <Code>{entryCheck.fingerprint}</Code>
++                                                </Text>
++                                            )}
++                                            <Button
++                                                disabled={!entryCheck || !!node.warning}
++                                                onClick={() => void prepare()}
++                                            >
++                                                Подготовить пару серверов
++                                            </Button>
++                                        </>
++                                    )}
++                                    <Divider />
++                                    <Text fw={600} size="sm">
++                                        Последняя успешная проверка ·{' '}
++                                        {new Date(node.verifiedAt).toLocaleString('ru-RU')}
++                                    </Text>
++                                    {node.lastProof.map((p) => (
++                                        <Text size="sm" key={p.engine}>
++                                            {p.engine}: {p.httpsRequests} HTTPS-запроса · выход{' '}
++                                            {p.egress}
++                                            {p.delayMs !== null ? ` · ${p.delayMs} мс` : ''}
++                                        </Text>
++                                    ))}
++                                </>
++                            )}
++                            <Text size="xs" c="dimmed">
++                                Работа через РФ не доказывает снятие блокировки прямого адреса.
++                                Проверки выполняются с сервера панели; доступность у оператора
++                                проверяется отдельно.
++                            </Text>
++                        </Stack>
++                    </Fieldset>
++                </Paper>
++            </SimpleGrid>
++        </Stack>
++    )
++}
 diff --git a/src/pages/dashboard/infrastructure/infrastructure.page.tsx b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e041f4ad2c4
+index 0000000000000000000000000000000000000000..f1ab207bd40ce2acc3345ecf3a1061e26c403f03
 --- /dev/null
 +++ b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
-@@ -0,0 +1,1240 @@
+@@ -0,0 +1,1278 @@
 +import {
 +    Alert,
 +    Badge,
@@ -123,6 +667,8 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +
 +import { useToken } from '@entities/auth'
 +
++import { GconfigView } from './gconfig.view'
++
 +type Summary = {
 +    connectedNodes: number
 +    hosts: number
@@ -163,6 +709,7 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +    state: string
 +    type: string
 +    updatedAt: string
++    result?: { stage?: string; warning?: string; rollbackErrors?: string[] }
 +}
 +
 +type SshCheck = {
@@ -274,7 +821,9 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +        completed: 'Завершено',
 +        planned: 'План готов',
 +        rollback_failed: 'Откат неполный',
-+        rolled_back: 'Отменено и откачено'
++        rolled_back: 'Отменено и откачено',
++        interrupted: 'Прервано — требуется сверка',
++        cleanup_failed: 'Не завершена очистка'
 +    }
 +    return labels[state] ?? state
 +}
@@ -470,8 +1019,8 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +                    <Stack>
 +                        <Title order={4}>Смена IP ноды</Title>
 +                        <Text c="dimmed" size="sm">
-+                            Панель найдёт связанные хосты, маршруты и Hysteria-домены до
-+                            применения. DNS обновится через Cloudflare автоматически.
++                            Панель найдёт связанные хосты, маршруты и Hysteria-домены до применения.
++                            DNS обновится через Cloudflare автоматически.
 +                        </Text>
 +                        <Alert
 +                            color={inventory.cloudflare.configured ? 'teal' : 'yellow'}
@@ -1155,11 +1704,34 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +                            operations.map((operation) => (
 +                                <Table.Tr key={operation.id}>
 +                                    <Table.Td>
-+                                        {operation.type === 'node-add'
-+                                            ? 'Добавление ноды'
-+                                            : 'Смена IP'}
++                                        {{
++                                            'node-add': 'Добавление ноды',
++                                            'ip-change': 'Смена IP',
++                                            'gconfig-install': 'Установка G-CONFIG',
++                                            'gconfig-route-prepare': 'Подготовка входа РФ',
++                                            'gconfig-route-switch': 'Смена маршрута'
++                                        }[operation.type] || operation.type}
 +                                    </Table.Td>
-+                                    <Table.Td fw={600}>{operation.resource}</Table.Td>
++                                    <Table.Td>
++                                        <Text fw={600} size="sm">
++                                            {operation.resource}
++                                        </Text>
++                                        {operation.result?.warning && (
++                                            <Text size="xs" c="red">
++                                                {operation.result.warning}
++                                            </Text>
++                                        )}
++                                        {operation.state === 'applying' && (
++                                            <Text size="xs" c="dimmed">
++                                                {operation.result?.stage}
++                                            </Text>
++                                        )}
++                                        {!!operation.result?.rollbackErrors?.length && (
++                                            <Text size="xs" c="red">
++                                                {operation.result.rollbackErrors.join(', ')}
++                                            </Text>
++                                        )}
++                                    </Table.Td>
 +                                    <Table.Td>
 +                                        {new Date(operation.createdAt).toLocaleString('ru-RU')}
 +                                    </Table.Td>
@@ -1277,6 +1849,9 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +                            <Tabs.Tab leftSection={<TbPlus size={16} />} value="node-add">
 +                                Добавить ноду
 +                            </Tabs.Tab>
++                            <Tabs.Tab leftSection={<TbTopologyStar3 size={16} />} value="gconfig">
++                                G-CONFIG и маршруты
++                            </Tabs.Tab>
 +                            <Tabs.Tab
 +                                leftSection={<TbArrowsExchange size={16} />}
 +                                value="ip-change"
@@ -1299,6 +1874,13 @@ index 0000000000000000000000000000000000000000..6abf2d81b7cd2bee32d9ebe503e95e04
 +                                inventory={inventory}
 +                                onComplete={() => void load(true)}
 +                                token={token}
++                            />
++                        </Tabs.Panel>
++                        <Tabs.Panel pt="lg" value="gconfig">
++                            <GconfigView
++                                token={token}
++                                squads={inventory.squads}
++                                onComplete={() => void load(true)}
 +                            />
 +                        </Tabs.Panel>
 +                        <Tabs.Panel pt="lg" value="ip-change">

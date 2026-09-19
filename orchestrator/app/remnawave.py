@@ -131,6 +131,15 @@ class RemnawaveClient:
     async def update_profile(self, body: dict[str, Any]) -> Any:
         return await self.request("PATCH", "/api/config-profiles/", body)
 
+    async def create_profile(self, body: dict[str, Any]) -> Any:
+        return await self.request("POST", "/api/config-profiles/", body)
+
+    async def delete_profile(self, uuid: str) -> Any:
+        return await self.request("DELETE", f"/api/config-profiles/{uuid}")
+
+    async def update_squad(self, body: dict[str, Any]) -> Any:
+        return await self.request("PATCH", "/api/internal-squads/", body)
+
     async def secret_key(self) -> str:
         result = await self.request("GET", "/api/keygen/")
         if not isinstance(result, dict) or not result.get("pubKey"):

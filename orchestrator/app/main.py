@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager, suppress
 from time import monotonic
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .audit import AuditStore
+from . import gconfig
 from .cloudflare import CloudflareClient, CloudflareConfigStore, CloudflareError
 from .inventory import normalize_inventory
+from .managed_store import ManagedStore
 from .operations import (
     OperationError,
     apply_ip_change,
@@ -20,12 +22,33 @@ from .operations import (
     ssh_preflight,
 )
 from .remnawave import RemnawaveClient, RemnawaveError
+from .rollback import Rollbacks
 from .settings import settings
 from .ssh import SshError
 
 BASE = "/ham-infrastructure"
-app = FastAPI(title="HAMVPN Infrastructure", docs_url=None, redoc_url=None, openapi_url=None)
-store = AuditStore(settings.data_dir)
+store = ManagedStore(settings.data_dir)
+rollbacks = Rollbacks(settings.data_dir, settings.remnawave_url)
+managed_lock = asyncio.Lock()
+managed_tasks: set[asyncio.Task] = set()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    for operation in store.recent(100):
+        if operation["operation_type"].startswith("gconfig-") and operation["state"] == "applying":
+            store.update(operation["id"], state="interrupted", result={
+                **operation["result"], "warning": "Сервис перезапущен во время операции. Проверьте созданные объекты перед повторной установкой"})
+    watcher = asyncio.create_task(rollbacks.watch(store))
+    try:
+        yield
+    finally:
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
+
+
+app = FastAPI(title="HAMVPN Infrastructure", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 cloudflare_store = CloudflareConfigStore(settings.data_dir)
 stored_cloudflare = cloudflare_store.load()
 try:
@@ -154,6 +177,8 @@ async def operations(ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -
                         "newAddress",
                         "rollbackErrors",
                         "dnsRecords",
+                        "stage",
+                        "proof",
                     }
                 },
             }
@@ -239,3 +264,71 @@ async def node_apply(
         body.get("ssh") if isinstance(body.get("ssh"), dict) else {},
         str(body.get("expectedFingerprint") or ""),
     )
+
+
+@app.get(f"{BASE}/api/gconfig")
+async def gconfig_inventory(ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, _, client = ctx
+    inventory = normalize_inventory(await client.inventory())
+    entries = []
+    for node in inventory["nodes"]:
+        if node["countryCode"] != "RU":
+            continue
+        shared = sum(n["profileUuid"] == node["profileUuid"] for n in inventory["nodes"]) > 1
+        entries.append({"uuid": node["uuid"], "name": node["name"], "address": node["address"],
+                        "ready": node["isConnected"] and not node["isDisabled"] and not shared,
+                        "reason": "Общий профиль" if shared else "" if node["isConnected"] else "Нет связи"})
+    rows = []
+    for record in store.nodes():
+        warning = None
+        try:
+            record, _, _ = await gconfig.managed_state(client, store, record["id"])
+        except (OperationError, RemnawaveError):
+            warning = "Настройки ноды изменены вне мастера. Переключение требует сверки"
+        rows.append({**gconfig.public_record(record), "warning": warning})
+    return {"nodes": rows, "entries": entries, "templateAvailable": any(p["name"] == "G-CONFIG" for p in inventory["profiles"])}
+
+
+@app.post(f"{BASE}/api/gconfig/plan")
+async def gconfig_plan(request: Request, ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, actor, client = ctx
+    mutation_guard(request, actor)
+    return await gconfig.create_plan(client, store, actor, await request.json())
+
+
+async def managed_operation(operation):
+    if managed_lock.locked():
+        raise OperationError("Другая операция G-CONFIG ещё выполняется; дождитесь её завершения")
+
+    async def execute():
+        async with managed_lock, rollbacks.lock:
+            return await operation()
+
+    task = asyncio.create_task(execute())
+    managed_tasks.add(task)
+    task.add_done_callback(managed_tasks.discard)
+    return await asyncio.shield(task)
+
+
+@app.post(f"{BASE}/api/gconfig/install")
+async def gconfig_install(request: Request, ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, actor, client = ctx
+    mutation_guard(request, actor, 6)
+    body = await request.json()
+    return await managed_operation(lambda: gconfig.install(client, store, settings, rollbacks, actor, body))
+
+
+@app.post(f"{BASE}/api/gconfig/route/prepare")
+async def gconfig_route_prepare(request: Request, ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, actor, client = ctx
+    mutation_guard(request, actor, 10)
+    body = await request.json()
+    return await managed_operation(lambda: gconfig.prepare_route(client, store, settings, rollbacks, actor, body))
+
+
+@app.post(f"{BASE}/api/gconfig/route/switch")
+async def gconfig_route_switch(request: Request, ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, actor, client = ctx
+    mutation_guard(request, actor, 10)
+    body = await request.json()
+    return await managed_operation(lambda: gconfig.switch_route(client, store, rollbacks, actor, body))
