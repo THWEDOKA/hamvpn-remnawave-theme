@@ -69,8 +69,11 @@ def plan(hosts, templates, mihomo):
             continue
         require(len(matches) == 1, "Ambiguous visible counterpart")
         v = matches[0]
+        compared = (set(v) | set(h)) - IGNORED
+        if v.get("fingerprint") == "firefox" and h.get("fingerprint") == "chrome":
+            compared.discard("fingerprint")
         require(
-            all(v.get(k) == h.get(k) for k in (set(v) | set(h)) - IGNORED),
+            all(v.get(k) == h.get(k) for k in compared),
             "Counterpart changes connection settings",
         )
         tags = sorted(set(changes.get(v["uuid"], v["tags"])) | pool)

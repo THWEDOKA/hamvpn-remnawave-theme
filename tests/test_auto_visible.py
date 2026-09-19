@@ -112,3 +112,11 @@ def test_ambiguous_counterpart_is_rejected():
     hosts.append({**hosts[0], "uuid": "second"})
     with pytest.raises(RuntimeError, match="Ambiguous"):
         m.plan(hosts, templates, yaml)
+
+
+def test_legacy_auto_chrome_uses_existing_visible_firefox_without_editing_host():
+    hosts, templates, yaml = source()
+    hosts[1]["fingerprint"] = "chrome"
+    p = m.plan(hosts, templates, yaml)
+    assert p["hostsAfter"][0]["fingerprint"] == "firefox"
+    assert p["hostTags"]["main"] == ["AUTO_BASE_POOL", "OTHER"]
