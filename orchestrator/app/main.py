@@ -286,7 +286,7 @@ async def gconfig_inventory(ctx: tuple[str, str, RemnawaveClient] = Depends(cont
         except (OperationError, RemnawaveError):
             warning = "Настройки ноды изменены вне мастера. Переключение требует сверки"
         rows.append({**gconfig.public_record(record), "warning": warning})
-    return {"nodes": rows, "entries": entries, "templateAvailable": any(p["name"] == "G-CONFIG" for p in inventory["profiles"])}
+    return {"nodes": rows, "entries": entries, "existing": gconfig.existing_candidates(inventory, store.nodes()), "templateAvailable": any(p["name"] == "G-CONFIG" for p in inventory["profiles"])}
 
 
 @app.post(f"{BASE}/api/gconfig/plan")
@@ -316,6 +316,14 @@ async def gconfig_install(request: Request, ctx: tuple[str, str, RemnawaveClient
     mutation_guard(request, actor, 6)
     body = await request.json()
     return await managed_operation(lambda: gconfig.install(client, store, settings, rollbacks, actor, body))
+
+
+@app.post(f"{BASE}/api/gconfig/adopt")
+async def gconfig_adopt(request: Request, ctx: tuple[str, str, RemnawaveClient] = Depends(context)) -> dict:
+    _, actor, client = ctx
+    mutation_guard(request, actor, 10)
+    body = await request.json()
+    return await managed_operation(lambda: gconfig.adopt_existing(client, store, actor, body))
 
 
 @app.post(f"{BASE}/api/gconfig/route/prepare")

@@ -480,10 +480,137 @@ async def install(client, store, settings, rollbacks, actor: str, body: dict) ->
             )
 
 
+def existing_candidate(inventory: dict, node_uuid: str, host_uuid: str) -> dict:
+    node = find(inventory["nodes"], node_uuid)
+    host = find(inventory["hosts"], host_uuid)
+    profile = find(inventory["profiles"], node["profileUuid"])
+    if node["countryCode"] == "RU" or node["isDisabled"] or not node["isConnected"]:
+        raise OperationError("Нужна включённая зарубежная нода со связью с панелью")
+    address = public_ip(node["address"])
+    binding = host.get("inbound") or {}
+    inbound_id = binding.get("configProfileInboundUuid")
+    if (
+        ids(host.get("nodes", [])) != [node_uuid]
+        or binding.get("configProfileUuid") != profile["uuid"]
+        or inbound_id not in ids(node["activeInbounds"])
+    ):
+        raise OperationError(
+            "Хост должен относиться только к выбранной ноде и её активному входу"
+        )
+    tag = find(profile["inbounds"], inbound_id).get("tag")
+    incoming = [i for i in profile["config"].get("inbounds", []) if i.get("tag") == tag]
+    if len(incoming) != 1:
+        raise OperationError("Не найден однозначный клиентский вход хоста")
+    inbound = incoming[0]
+    stream = inbound.get("streamSettings", {})
+    if (
+        inbound.get("protocol") != "vless"
+        or stream.get("security") != "reality"
+        or stream.get("network", "raw") not in ("raw", "tcp")
+    ):
+        raise OperationError("Переключатель поддерживает VLESS / REALITY / TCP")
+    if stream.get("realitySettings", {}).get("minClientVer") != "1.8.2":
+        raise OperationError(
+            "В клиентском входе нужен minClientVer 1.8.2. Сначала настройте совместимость; общий профиль автоматически не меняется"
+        )
+    if host.get("fingerprint") != "firefox":
+        raise OperationError("В настройках выбранного хоста нужен fingerprint Firefox")
+    port = inbound.get("port")
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise OperationError("Клиентский вход должен использовать один TCP-порт")
+    if host["address"] != address or host["port"] != port:
+        raise OperationError(
+            "Хост уже использует другой адрес или мост. Его маршрут требует отдельного переноса"
+        )
+    if host["isDisabled"]:
+        raise OperationError("Сначала включите выбранный хост в панели")
+    if any(
+        o.get("protocol") not in ("freedom", "blackhole")
+        for o in profile["config"].get("outbounds", [])
+    ):
+        raise OperationError(
+            "Профиль содержит дополнительные выходы; нужен разбор текущей цепочки"
+        )
+    if sum(h["remark"] == host["remark"] for h in inventory["hosts"]) != 1:
+        raise OperationError("Для проверки подписки нужно уникальное имя хоста")
+    return {
+        "name": host["remark"],
+        "nodeUuid": node_uuid,
+        "hostUuid": host_uuid,
+        "profileUuid": profile["uuid"],
+        "inboundUuid": inbound_id,
+        "address": address,
+        "directPort": port,
+        "profileHash": digest(profile["config"]),
+        "source": "existing",
+        "mode": "direct",
+        "route": None,
+        "lastProof": [],
+        "verifiedAt": None,
+    }
+
+
+def existing_candidates(inventory: dict, records: list) -> list:
+    managed = {r["hostUuid"] for r in records}
+    rows = []
+    for node in inventory["nodes"]:
+        if node["countryCode"] == "RU":
+            continue
+        for host in inventory["hosts"]:
+            if (
+                node["uuid"] not in ids(host.get("nodes", []))
+                or host["uuid"] in managed
+            ):
+                continue
+            reason = ""
+            try:
+                existing_candidate(inventory, node["uuid"], host["uuid"])
+            except OperationError as error:
+                reason = str(error)
+            rows.append(
+                {
+                    "nodeUuid": node["uuid"],
+                    "nodeName": node["name"],
+                    "hostUuid": host["uuid"],
+                    "name": host["remark"],
+                    "address": host["address"],
+                    "port": host["port"],
+                    "ready": not reason,
+                    "reason": reason,
+                }
+            )
+    return rows
+
+
+async def adopt_existing(client, store, actor: str, body: dict) -> dict:
+    inventory = normalize_inventory(await client.inventory())
+    record = existing_candidate(
+        inventory, str(body.get("nodeUuid", "")), str(body.get("hostUuid", ""))
+    )
+    if any(r["hostUuid"] == record["hostUuid"] for r in store.nodes()):
+        raise OperationError("Этот хост уже подключён к переключателю")
+    identifier = store.create(
+        "gconfig-adopt",
+        actor,
+        record["name"],
+        {"impact": {}, "hostUuid": record["hostUuid"]},
+    )
+    record["id"] = identifier
+    store.save_node(identifier, record)
+    store.update(
+        identifier,
+        state="completed",
+        result={
+            "stage": "Действующий хост подключён к управлению. Клиентские проверки выполняются при подготовке маршрута"
+        },
+    )
+    return public_record(record)
+
+
 async def managed_state(client, store, identifier: str) -> tuple[dict, dict, dict]:
     record = store.node(identifier)
     if not record:
-        raise OperationError("Выберите ноду, установленную через G-CONFIG")
+        raise OperationError("Выберите хост, подключённый к переключателю")
     node = await client.request("GET", f"/api/nodes/{record['nodeUuid']}")
     host = await client.request("GET", f"/api/hosts/{record['hostUuid']}")
     profile = await client.request(
@@ -494,13 +621,17 @@ async def managed_state(client, store, identifier: str) -> tuple[dict, dict, dic
         or node["configProfile"]["activeConfigProfileUuid"] != record["profileUuid"]
         or ids(host.get("nodes", [])) != [record["nodeUuid"]]
         or host["inbound"]["configProfileInboundUuid"] != record["inboundUuid"]
+        or host["inbound"].get("configProfileUuid") != record["profileUuid"]
+        or record["inboundUuid"]
+        not in ids(node["configProfile"].get("activeInbounds", []))
         or host.get("fingerprint") != "firefox"
         or host.get("isDisabled")
     ):
         raise OperationError(
             "Параметры управляемой ноды изменены вне мастера; требуется сверка"
         )
-    incoming = profile["config"].get("inbounds", [])
+    tag = find(profile["inbounds"], record["inboundUuid"]).get("tag")
+    incoming = [i for i in profile["config"].get("inbounds", []) if i.get("tag") == tag]
     if (
         len(incoming) != 1
         or incoming[0]
@@ -512,7 +643,14 @@ async def managed_state(client, store, identifier: str) -> tuple[dict, dict, dic
         raise OperationError(
             "Не подтверждена настройка совместимости REALITY в профиле"
         )
-    if (host["address"], host["port"]) == (record["address"], 443):
+    if record.get("profileHash") and digest(profile["config"]) != record["profileHash"]:
+        raise OperationError(
+            "Профиль действующей ноды изменился; требуется повторная сверка"
+        )
+    if (host["address"], host["port"]) == (
+        record["address"],
+        record.get("directPort", 443),
+    ):
         record["mode"] = "direct"
     elif record.get("route") and (host["address"], host["port"]) == (
         record["route"]["address"],
@@ -580,7 +718,11 @@ async def prepare_route(
     port = body.get("port")
     tag = "ham-relay-" + record["id"].replace("-", "")[:12]
     config = relay_candidate(
-        profile["config"], tag=tag, port=port, exit_ip=record["address"]
+        profile["config"],
+        tag=tag,
+        port=port,
+        exit_ip=record["address"],
+        exit_port=record.get("directPort", 443),
     )
     operation_id = store.create(
         "gconfig-route-prepare",
@@ -717,7 +859,7 @@ async def switch_route(client, store, rollbacks, actor: str, body: dict) -> dict
     if mode == "ru":
         await verify_route(client, record)
     address, port = (
-        (record["address"], 443)
+        (record["address"], record.get("directPort", 443))
         if mode == "direct"
         else (record["route"]["address"], record["route"]["port"])
     )

@@ -356,6 +356,110 @@ def test_shared_entry_profile_is_rejected_before_mutation(setup):
     asyncio.run(scenario())
 
 
+async def existing_setup(setup):
+    record, _ = await install(setup)
+    client, store, _, _ = setup
+    with store.connection() as db:
+        db.execute("DELETE FROM managed_nodes")
+    profile = next(
+        p for p in client.data["config-profiles"] if p["uuid"] == record["profileUuid"]
+    )
+    profile["config"]["inbounds"][0]["port"] = 32443
+    profile["config"]["inbounds"].append(
+        {"tag": "other", "protocol": "hysteria", "port": 4500}
+    )
+    client.data["hosts"][0]["port"] = 32443
+    client.data["nodes"].append(
+        {**deepcopy(client.data["nodes"][0]), "uuid": "neighbor", "address": "9.9.9.9"}
+    )
+    return {"nodeUuid": record["nodeUuid"], "hostUuid": record["hostUuid"]}
+
+
+def test_adopts_existing_shared_profile_without_writes_and_switches_original_port(
+    setup,
+):
+    async def scenario():
+        client, store, rollback, settings = setup
+        body = await existing_setup(setup)
+        before = deepcopy(client.data)
+        record = await gconfig.adopt_existing(client, store, "actor", body)
+        assert client.data == before
+        assert record["verifiedAt"] is None and record["lastProof"] == []
+        with pytest.raises(OperationError, match="уже подключён"):
+            await gconfig.adopt_existing(client, store, "actor", body)
+        add_entry(client)
+        original_profiles = deepcopy(client.data["config-profiles"][:-1])
+        original_host = deepcopy(client.data["hosts"][0])
+        await gconfig.prepare_route(
+            client, store, settings, rollback, "actor", prepare_body(record)
+        )
+        assert (
+            client.data["config-profiles"][-1]["config"]["inbounds"][-1]["settings"][
+                "port"
+            ]
+            == 32443
+        )
+        for mode in ("ru", "direct"):
+            await gconfig.switch_route(
+                client, store, rollback, "actor", {"id": record["id"], "mode": mode}
+            )
+        assert client.data["hosts"][0] == original_host
+        assert client.data["config-profiles"][:-1] == original_profiles
+        assert client.data["users"] == []
+        assert not list(rollback.directory.glob("*.lease"))
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "change", ["bridge", "fingerprint", "compatibility", "binding", "udp", "disabled"]
+)
+def test_adoption_rejects_unsafe_existing_host_without_writes(setup, change):
+    async def scenario():
+        client, store, _, _ = setup
+        body = await existing_setup(setup)
+        host = client.data["hosts"][0]
+        incoming = client.data["config-profiles"][-1]["config"]["inbounds"][0]
+        if change == "bridge":
+            host["address"] = "1.1.1.1"
+        elif change == "fingerprint":
+            host["fingerprint"] = "chrome"
+        elif change == "compatibility":
+            incoming["streamSettings"]["realitySettings"].pop("minClientVer")
+        elif change == "binding":
+            host["nodes"].append("neighbor")
+        elif change == "udp":
+            incoming["protocol"] = "hysteria"
+        else:
+            host["isDisabled"] = True
+        before = deepcopy(client.data)
+        with pytest.raises(OperationError):
+            await gconfig.adopt_existing(client, store, "actor", body)
+        assert client.data == before and store.nodes() == []
+        rows = gconfig.existing_candidates(
+            gconfig.normalize_inventory(await client.inventory()), []
+        )
+        assert rows and all(not r["ready"] and r["reason"] for r in rows)
+
+    asyncio.run(scenario())
+
+
+def test_adopted_profile_drift_blocks_switch_before_writes(setup):
+    async def scenario():
+        client, store, rollback, _ = setup
+        body = await existing_setup(setup)
+        record = await gconfig.adopt_existing(client, store, "actor", body)
+        client.data["config-profiles"][-1]["config"]["routing"]["rules"] = []
+        before = deepcopy(client.data)
+        with pytest.raises(OperationError, match="изменился"):
+            await gconfig.switch_route(
+                client, store, rollback, "actor", {"id": record["id"], "mode": "ru"}
+            )
+        assert client.data == before
+
+    asyncio.run(scenario())
+
+
 def test_post_switch_probe_failure_rolls_host_back(setup, monkeypatch):
     async def scenario():
         client, store, rollback, settings = setup

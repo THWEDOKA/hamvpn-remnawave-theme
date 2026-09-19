@@ -93,8 +93,12 @@ def fresh_config(profile: dict, suffix: str) -> dict:
     return config
 
 
-def relay_candidate(config: dict, *, tag: str, port: int, exit_ip: str) -> dict:
+def relay_candidate(
+    config: dict, *, tag: str, port: int, exit_ip: str, exit_port: int = 443
+) -> dict:
     public_ip(exit_ip)
+    if type(exit_port) is not int or not 1 <= exit_port <= 65535:
+        raise OperationError("Некорректный TCP-порт зарубежной ноды")
     if type(port) is not int or not 1024 <= port <= 65535:
         raise OperationError("Порт российского входа должен быть от 1024 до 65535")
     result = deepcopy(config)
@@ -123,7 +127,7 @@ def relay_candidate(config: dict, *, tag: str, port: int, exit_ip: str) -> dict:
             "protocol": "dokodemo-door",
             "settings": {
                 "address": exit_ip,
-                "port": 443,
+                "port": exit_port,
                 "network": "tcp",
                 "followRedirect": False,
             },

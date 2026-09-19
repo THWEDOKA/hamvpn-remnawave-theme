@@ -98,9 +98,9 @@ class RemnawaveClient:
         squads = await self.request("GET", "/api/internal-squads/")
         return {
             "nodes": nodes if isinstance(nodes, list) else [],
-            "hosts": hosts if isinstance(hosts, list) else [],
+            "hosts": self._collection(hosts, "hosts", "items"),
             "profiles": profiles if isinstance(profiles, list) else [],
-            "squads": squads if isinstance(squads, list) else [],
+            "squads": self._collection(squads, "internalSquads", "squads", "items"),
         }
 
     async def update_node(self, body: dict[str, Any]) -> Any:

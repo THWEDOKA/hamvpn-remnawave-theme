@@ -53,6 +53,7 @@ def normalize_inventory(raw: dict[str, Any]) -> dict[str, Any]:
                 "address": host.get("address"),
                 "port": host.get("port"),
                 "isDisabled": bool(host.get("isDisabled")),
+                "fingerprint": host.get("fingerprint"),
                 "nodes": host.get("nodes") or [],
                 "inbound": inbound,
                 "excludedInternalSquads": host.get("excludedInternalSquads") or [],

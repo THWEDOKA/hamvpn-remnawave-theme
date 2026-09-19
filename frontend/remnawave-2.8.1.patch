@@ -73,10 +73,10 @@ index fed8476359a60db75c67a4002dc7bde87afda064..339f16a0128489275b4907db24df25d4
                              element={<NodesBandwidthTablePageConnector />}
 diff --git a/src/pages/dashboard/infrastructure/gconfig.view.tsx b/src/pages/dashboard/infrastructure/gconfig.view.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a0202386d918
+index 0000000000000000000000000000000000000000..c7c7f7a0c47edbf0925e43270a7a9008c64ba8e0
 --- /dev/null
 +++ b/src/pages/dashboard/infrastructure/gconfig.view.tsx
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,611 @@
 +import {
 +    Alert,
 +    Badge,
@@ -112,10 +112,25 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +    warning?: string
 +    route: { entryUuid: string; entryName: string; address: string; port: number } | null
 +    lastProof: Proof[]
-+    verifiedAt: string
++    verifiedAt: string | null
 +}
 +type Entry = { uuid: string; name: string; address: string; ready: boolean; reason: string }
-+type Data = { nodes: ManagedNode[]; entries: Entry[]; templateAvailable: boolean }
++type Existing = {
++    nodeUuid: string
++    nodeName: string
++    hostUuid: string
++    name: string
++    address: string
++    port: number
++    ready: boolean
++    reason: string
++}
++type Data = {
++    nodes: ManagedNode[]
++    entries: Entry[]
++    existing: Existing[]
++    templateAvailable: boolean
++}
 +type Plan = { operationId: string; name: string; address: string; sni: string }
 +const emptySsh = (): Ssh => ({ host: '', port: 22, username: 'root', password: '', privateKey: '' })
 +
@@ -193,11 +208,13 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +    const [plan, setPlan] = useState<Plan | null>(null)
 +    const [confirmation, setConfirmation] = useState('')
 +    const [selected, setSelected] = useState<string | null>(null)
++    const [existingHost, setExistingHost] = useState<string | null>(null)
 +    const [entryUuid, setEntryUuid] = useState<string | null>(null)
 +    const [entrySsh, setEntrySsh] = useState<Ssh>(emptySsh)
 +    const [entryCheck, setEntryCheck] = useState<Check | null>(null)
 +    const [port, setPort] = useState(19443)
 +    const node = data?.nodes.find((n) => n.id === selected)
++    const existing = data?.existing?.find((h) => `${h.nodeUuid}:${h.hostUuid}` === existingHost)
 +
 +    const api = async <T,>(path: string, body?: unknown): Promise<T> => {
 +        const response = await axios.request<T>({
@@ -309,6 +326,24 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +                setEntrySsh((v) => ({ ...v, password: '', privateKey: '' }))
 +                setEntryCheck(null)
 +            }
++        })
++    const adopt = () =>
++        run('Подключаем действующий хост к управлению', async () => {
++            if (!existing) return
++            const result = await api<ManagedNode>('/gconfig/adopt', {
++                nodeUuid: existing.nodeUuid,
++                hostUuid: existing.hostUuid
++            })
++            await refresh()
++            setSelected(result.id)
++            setExistingHost(null)
++            setEntryUuid(null)
++            setEntryCheck(null)
++            setEntrySsh(emptySsh())
++            notifications.show({
++                color: 'teal',
++                message: 'Хост добавлен. Выберите вход РФ и подготовьте маршрут.'
++            })
 +        })
 +    const switchRoute = () =>
 +        run('Проверяем и переключаем маршрут', async () => {
@@ -486,11 +521,48 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +                                устройствам нужно обновить подписку.
 +                            </Text>
 +                            <Select
-+                                label="Нода из этого мастера"
++                                label="Добавить действующий хост"
++                                placeholder="Выберите ноду и хост из подписки"
++                                data={(data?.existing || []).map((h) => ({
++                                    value: `${h.nodeUuid}:${h.hostUuid}`,
++                                    label: `${h.nodeName} · ${h.name} · ${h.address}:${h.port}`
++                                }))}
++                                value={existingHost}
++                                onChange={setExistingHost}
++                                searchable
++                            />
++                            {existing && (
++                                <>
++                                    {existing.reason ? (
++                                        <Alert
++                                            color="yellow"
++                                            title="Перед подключением к переключателю"
++                                        >
++                                            {existing.reason}
++                                        </Alert>
++                                    ) : (
++                                        <Text size="sm">
++                                            Будет добавлен только этот хост. Текущие ключи, профиль
++                                            и пользователи сохраняются. Доступность маршрута
++                                            проверяется при подготовке пары.
++                                        </Text>
++                                    )}
++                                    <Button
++                                        variant="light"
++                                        disabled={!existing.ready}
++                                        onClick={() => void adopt()}
++                                    >
++                                        Подключить хост к переключателю
++                                    </Button>
++                                </>
++                            )}
++                            <Divider />
++                            <Select
++                                label="Управляемый хост"
 +                                placeholder={
 +                                    data?.nodes.length
 +                                        ? 'Выберите ноду'
-+                                        : 'Сначала установите ноду слева'
++                                        : 'Добавьте действующий хост или установите новую ноду'
 +                                }
 +                                data={(data?.nodes || []).map((n) => ({
 +                                    value: n.id,
@@ -591,8 +663,9 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +                                    )}
 +                                    <Divider />
 +                                    <Text fw={600} size="sm">
-+                                        Последняя успешная проверка ·{' '}
-+                                        {new Date(node.verifiedAt).toLocaleString('ru-RU')}
++                                        {node.verifiedAt
++                                            ? `Последняя успешная проверка · ${new Date(node.verifiedAt).toLocaleString('ru-RU')}`
++                                            : 'Клиентские проверки ещё не выполнены. Подготовьте маршрут через РФ.'}
 +                                    </Text>
 +                                    {node.lastProof.map((p) => (
 +                                        <Text size="sm" key={p.engine}>
@@ -617,10 +690,10 @@ index 0000000000000000000000000000000000000000..fa171709a7d7a0e6d20a95ec8857a020
 +}
 diff --git a/src/pages/dashboard/infrastructure/infrastructure.page.tsx b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..f1ab207bd40ce2acc3345ecf3a1061e26c403f03
+index 0000000000000000000000000000000000000000..f7b51369dd7643d15995cdee65d23c6e1a4fe242
 --- /dev/null
 +++ b/src/pages/dashboard/infrastructure/infrastructure.page.tsx
-@@ -0,0 +1,1278 @@
+@@ -0,0 +1,1279 @@
 +import {
 +    Alert,
 +    Badge,
@@ -1708,6 +1781,7 @@ index 0000000000000000000000000000000000000000..f1ab207bd40ce2acc3345ecf3a1061e2
 +                                            'node-add': 'Добавление ноды',
 +                                            'ip-change': 'Смена IP',
 +                                            'gconfig-install': 'Установка G-CONFIG',
++                                            'gconfig-adopt': 'Подключение действующего хоста',
 +                                            'gconfig-route-prepare': 'Подготовка входа РФ',
 +                                            'gconfig-route-switch': 'Смена маршрута'
 +                                        }[operation.type] || operation.type}
