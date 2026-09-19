@@ -346,6 +346,7 @@ async def install(client, store, settings, rollbacks, actor: str, body: dict) ->
         rollbacks.arm(identifier, client.token, publish_actions)
         checkpoint("Публикация в выбранных сквадах")
         for change in publish_actions:
+            rollbacks.check_window(identifier)
             current = await client.request("GET", change["read"])
             if projection(current, change["before"]) != change["before"]:
                 raise OperationError("Права сквада изменены во время публикации")
@@ -391,6 +392,7 @@ async def install(client, store, settings, rollbacks, actor: str, body: dict) ->
             "squadUuids": plan["squadUuids"],
             "verifiedAt": datetime.now(timezone.utc).isoformat(),
         }
+        rollbacks.check_window(identifier)
         store.save_node(identifier, record)
         rollbacks.disarm(identifier)
         store.update(
@@ -647,6 +649,7 @@ async def prepare_route(
         }
         record["lastProof"] = proof
         record["verifiedAt"] = datetime.now(timezone.utc).isoformat()
+        rollbacks.check_window(operation_id)
         store.save_node(record["id"], record)
         rollbacks.disarm(operation_id)
         store.update(
@@ -757,6 +760,7 @@ async def switch_route(client, store, rollbacks, actor: str, body: dict) -> dict
         record["mode"] = mode
         record["lastProof"] = proof
         record["verifiedAt"] = datetime.now(timezone.utc).isoformat()
+        rollbacks.check_window(operation_id)
         store.save_node(record["id"], record)
         rollbacks.disarm(operation_id)
         store.update(

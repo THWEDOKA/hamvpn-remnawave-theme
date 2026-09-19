@@ -522,3 +522,18 @@ def test_ssh_host_key_mismatch_prevents_authentication(monkeypatch):
     with pytest.raises(SshError):
         SshSession(SshCredentials("8.8.4.4", 22, "root", "secret"), "SHA256:expected")
     assert authenticated == []
+
+
+def test_exhausted_rollback_discards_session_token(setup):
+    client, _store, rollback, _settings = setup
+    client.data["hosts"] = [{"uuid": "host", "address": "other-operator"}]
+    identifier = str(uuid.uuid4())
+    rollback.arm(
+        identifier,
+        client.token,
+        [gconfig.action("hosts", "host", {"address": "old"}, {"address": "new"})],
+    )
+    for _ in range(3):
+        assert asyncio.run(rollback.restore(identifier)) == ["drift:hosts"]
+    assert "token" not in rollback.read(identifier)
+    assert client.data["hosts"][0]["address"] == "other-operator"

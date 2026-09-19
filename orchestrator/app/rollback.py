@@ -11,6 +11,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 
 from .gconfig_model import ids
+from .operations import OperationError
 from .remnawave import RemnawaveClient
 
 
@@ -80,6 +81,12 @@ class Rollbacks:
     def disarm(self, identifier: str) -> None:
         self._path(identifier).unlink(missing_ok=True)
 
+    def check_window(self, identifier: str) -> None:
+        if self.read(identifier)["deadline"] <= time.time():
+            raise OperationError(
+                "Истекло окно проверки; изменения должны быть отменены"
+            )
+
     async def restore(self, identifier: str) -> list[str]:
         lease = self.read(identifier)
         client = RemnawaveClient(self.base_url, lease["token"])
@@ -105,6 +112,8 @@ class Rollbacks:
         if errors:
             lease["deadline"] = time.time() + 60
             lease["failures"] = lease.get("failures", 0) + 1
+            if lease["failures"] >= 3:
+                lease.pop("token", None)
             self.write(identifier, lease)
         else:
             self.disarm(identifier)
