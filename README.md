@@ -91,6 +91,10 @@ docker build --pull=false \
 
 Базовый backend-образ, frontend commit и Node.js build-образ закреплены по digest/commit, поэтому сборка не получает обновление Remnawave неожиданно.
 
+Для передачи release-архива с Windows используйте `git -c core.autocrlf=false archive`.
+Frontend-патч закреплён как LF в `.gitattributes`: CRLF в архиве не применяется
+к исходникам Linux, даже если локальный `git apply --check` на Windows проходит.
+
 ## Проверка
 
 ```bash
