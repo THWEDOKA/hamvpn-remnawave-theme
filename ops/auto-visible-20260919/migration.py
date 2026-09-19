@@ -332,7 +332,9 @@ def wire(outbound):
 
 def validate_exports(actual, expected, baseline):
     receivers = {
-        h["remark"] for h in read("before")["hosts"] if h.get("xrayJsonTemplateUuid")
+        h["remark"]
+        for h in read("before")["hosts"]
+        if h.get("xrayJsonTemplateUuid") and not h["isHidden"]
     }
     ordinary = lambda configs: {
         c["remarks"]: c.get("outbounds", [])
@@ -377,7 +379,9 @@ def validate_exports(actual, expected, baseline):
 
 def measure(expected):
     receivers = {
-        h["remark"] for h in read("before")["hosts"] if h.get("xrayJsonTemplateUuid")
+        h["remark"]
+        for h in read("before")["hosts"]
+        if h.get("xrayJsonTemplateUuid") and not h["isHidden"]
     }
     autos = [
         c
