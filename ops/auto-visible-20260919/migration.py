@@ -14,7 +14,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from model import digest, plan, require
+from model import digest, plan, rebind_managed, require
 
 ROOT = Path(__file__).resolve().parent
 STATE = Path("/root/ham-auto-visible-20260919")
@@ -141,10 +141,11 @@ def prepare(api):
         records = [
             json.loads(row[0]) for row in db.execute("SELECT value FROM managed_nodes")
         ]
-    require(
-        not any(r["hostUuid"] in candidate["hiddenIds"] for r in records),
-        "A hidden host is managed by the route switcher",
+    before["managed"] = records
+    candidate["managedAfter"] = rebind_managed(
+        records, candidate["pairs"], candidate["hiddenIds"]
     )
+    candidate["sha256"] = digest({k: v for k, v in candidate.items() if k != "sha256"})
     save("before", before)
     save("plan", candidate)
     db = json.loads(run("docker", "inspect", "remnawave-db"))[0]
@@ -182,6 +183,19 @@ def prepare(api):
 
 def assert_state(api, phase):
     now, before, candidate = inventory(api), read("before"), read("plan")
+    with sqlite3.connect(
+        "file:/opt/hamvpn-infrastructure/infrastructure.sqlite3?mode=ro", uri=True
+    ) as db:
+        managed = [
+            json.loads(row[0]) for row in db.execute("SELECT value FROM managed_nodes")
+        ]
+    expected_managed = (
+        candidate["managedAfter"] if phase == "deleted" else before["managed"]
+    )
+    require(
+        {r["id"]: r for r in managed} == {r["id"]: r for r in expected_managed},
+        "Route switcher registry changed",
+    )
     require(
         digest(now["protected"]) == digest(before["protected"]),
         "Node/profile/squad drift",
@@ -536,6 +550,29 @@ def finalize(api):
         "Rollback already running",
     )
     save("delete-intent", {"time": time.time(), "ids": read("plan")["hiddenIds"]})
+    with sqlite3.connect("/opt/hamvpn-infrastructure/infrastructure.sqlite3") as db:
+        db.execute("BEGIN IMMEDIATE")
+        require(
+            db.execute(
+                "SELECT count(*) FROM operations WHERE state='applying'"
+            ).fetchone()[0]
+            == 0,
+            "An infrastructure operation is running",
+        )
+        rows = {
+            identifier: value
+            for identifier, value in db.execute("SELECT id,value FROM managed_nodes")
+        }
+        require(
+            {i: json.loads(v) for i, v in rows.items()}
+            == {r["id"]: r for r in read("before")["managed"]},
+            "Managed registry changed before finalization",
+        )
+        for record in read("plan")["managedAfter"]:
+            db.execute(
+                "UPDATE managed_nodes SET value=? WHERE id=?",
+                (json.dumps(record, ensure_ascii=False), record["id"]),
+            )
     for identifier in read("plan")["hiddenIds"]:
         api("DELETE", "/api/hosts/" + identifier)
     assert_state(api, "deleted")

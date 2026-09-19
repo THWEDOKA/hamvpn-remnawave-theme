@@ -38,6 +38,27 @@ def exact_regex(names):
     )
 
 
+def rebind_managed(records, pairs, hidden_ids):
+    targets = {p["hidden"]: p for p in pairs}
+    result = deepcopy(records)
+    for record in result:
+        if record["hostUuid"] not in hidden_ids:
+            continue
+        require(
+            record["hostUuid"] in targets
+            and not record.get("route")
+            and record["mode"] == "direct",
+            "Managed hidden route requires separate migration",
+        )
+        target = targets[record["hostUuid"]]
+        require(
+            not any(r["hostUuid"] == target["visible"] for r in records),
+            "Visible counterpart already managed",
+        )
+        record["hostUuid"], record["name"] = target["visible"], target["name"]
+    return result
+
+
 def plan(hosts, templates, mihomo):
     visible = [h for h in hosts if not h["isHidden"]]
     hidden = [h for h in hosts if h["isHidden"]]

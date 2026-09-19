@@ -120,3 +120,26 @@ def test_legacy_auto_chrome_uses_existing_visible_firefox_without_editing_host()
     p = m.plan(hosts, templates, yaml)
     assert p["hostsAfter"][0]["fingerprint"] == "firefox"
     assert p["hostTags"]["main"] == ["AUTO_BASE_POOL", "OTHER"]
+
+
+def test_managed_hidden_host_keeps_its_identity_when_rebound():
+    record = {
+        "id": "managed",
+        "hostUuid": "hidden",
+        "name": "ABP-1",
+        "mode": "direct",
+        "route": None,
+        "nodeUuid": "node",
+        "directPort": 32443,
+    }
+    out = m.rebind_managed(
+        [record], [{"hidden": "hidden", "visible": "main", "name": "NL"}], ["hidden"]
+    )
+    assert out == [{**record, "hostUuid": "main", "name": "NL"}]
+    assert record["hostUuid"] == "hidden"
+    with pytest.raises(RuntimeError, match="separate migration"):
+        m.rebind_managed(
+            [{**record, "route": {"entryUuid": "ru"}}],
+            [{"hidden": "hidden", "visible": "main", "name": "NL"}],
+            ["hidden"],
+        )
