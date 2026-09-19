@@ -65,7 +65,7 @@ async def measure(engine, source, members):
             command = ["mihomo", "-d", directory, "-f"]
             check = ["mihomo", "-t", "-d", directory, "-f"]
         path = Path(directory) / "config.json"
-        path.write_text(json.dumps(config))
+        path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
         os.chmod(path, 0o600)
         process = await asyncio.create_subprocess_exec(
             *check,
