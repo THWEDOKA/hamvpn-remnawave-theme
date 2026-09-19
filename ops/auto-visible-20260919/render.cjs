@@ -9,6 +9,8 @@ const { MihomoGeneratorService } = require('/opt/app/dist/src/modules/subscripti
   const templates = new Map(p.templates.map(t => [t.uuid, t.templateJson]));
   for (const h of hosts) {
     const item = byId.get(h.metadata.uuid);
+    if (!item && hosts.length === 1 && h.metadata.uuid === '00000000-0000-0000-0000-000000000000'
+        && h.metadata.configProfileUuid === null && h.metadata.rawInbound === null) continue;
     if (!item) throw Error('Resolved host not in catalog');
     h.metadata.tags = item.tags;
     if (item.xrayJsonTemplateUuid) h.clientOverrides.xrayJsonTemplate = templates.get(item.xrayJsonTemplateUuid);
