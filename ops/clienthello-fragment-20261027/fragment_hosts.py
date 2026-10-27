@@ -16,6 +16,7 @@ def clone_payload(host, remark):
     payload = deepcopy(host)
     for key in ['uuid', 'viewPosition']: payload.pop(key, None)
     payload.update(remark=remark, finalMask=deepcopy(FINAL_MASK), fingerprint='firefox')
+    payload['tags'] = [tag for tag in payload.get('tags', []) if tag not in {'AUTO_BASE_POOL', 'AUTO_WHITE_POOL'}]
     # No experimental variants in clients that cannot apply Xray FinalMask.
     payload['excludeFromSubscriptionTypes'] = sorted(set(payload.get('excludeFromSubscriptionTypes') or []) | {'MIHOMO', 'CLASH', 'STASH', 'SINGBOX', 'XRAY_BASE64'})
     return payload

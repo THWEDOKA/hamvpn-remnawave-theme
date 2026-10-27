@@ -20,5 +20,9 @@ class CloneTests(unittest.TestCase):
         for patch in [{'isDisabled': True}, {'port': 8443}, {'fingerprint': 'chrome'}, {'finalMask': {'tcp': []}}]:
             with self.assertRaises(ValueError): clone_payload(self.source() | patch, 'test')
 
+    def test_experimental_clones_never_inherit_automatic_pool_membership(self):
+        clone=clone_payload(self.source() | {'tags':['AUTO_BASE_POOL','REGION_DE','AUTO_WHITE_POOL']},'test')
+        self.assertEqual(clone['tags'],['REGION_DE'])
+
 
 if __name__ == '__main__': unittest.main()
