@@ -41,7 +41,24 @@ Primary sources:
 - <https://github.com/MetaCubeX/utls/blob/v1.8.8/u_common.go>
 - <https://github.com/MetaCubeX/utls/blob/v1.8.8/u_parrots.go>
 
-Do not silently switch to Chrome, downgrade Xray, disable REALITY authentication
+## Two-node non-Chrome canary results
+
+The owner permitted testing fingerprints other than Firefox, but expressed a
+preference against Chrome for the eventual rollout. Tests used isolated mihomo
+1.19.33 from the bot server, actual private subscription credentials in memory,
+and `support-x25519mlkem768: true`. Production profiles were not changed.
+
+| Existing host | Safari: both HTTPS URL tests | Edge: both HTTPS URL tests | Chrome control: both HTTPS URL tests |
+|---|---|---|---|
+| Poland | Failed, controller 503 | Failed, controller 503 | Passed, controller 200 with latency |
+| United Kingdom 2 | Failed, controller 503 | Failed, controller 503 | Passed, controller 200 with latency |
+
+Targets were gstatic generate_204 and Cloudflare trace. A separate Chrome/PQC
+Poland check also returned HTTPS 204 and the expected Polish egress address.
+These are tests from the bot server, not proof for every Russian operator.
+Safari/Edge public test hosts were not published because they failed the canary.
+
+Do not silently switch production hosts to Chrome, downgrade Xray, disable REALITY authentication
 or replace working endpoints. A parallel VLESS+TLS canary preserving Firefox
 and existing REALITY endpoints requires the owner's explicit scope decision.
 Availability from one test network is not proof of reachability from all ISPs.
