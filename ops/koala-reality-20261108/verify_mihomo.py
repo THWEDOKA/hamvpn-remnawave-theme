@@ -26,6 +26,7 @@ def main():
     parser.add_argument('subscription');parser.add_argument('core')
     parser.add_argument('--expected',default='150.251.112.172')
     parser.add_argument('--name',default='🇵🇱 Польша')
+    parser.add_argument('--interface',help='Optional physical interface for an isolated probe alongside an active VPN')
     args=parser.parse_args()
     source=yaml.safe_load(Path(args.subscription).read_text(encoding='utf-8'))
     original=next(p for p in source['proxies'] if p['name']==args.name)
@@ -41,6 +42,7 @@ def main():
                     'nameserver':['https://1.1.1.1/dns-query'],'default-nameserver':['1.1.1.1'],
                     'proxy-server-nameserver':['https://1.1.1.1/dns-query']},
              'proxies':[proxy],'rules':['MATCH,POLAND_CHECK']}
+        if args.interface:cfg['interface-name']=args.interface
         path=Path(folder)/'config.json';path.write_text(json.dumps(cfg),encoding='utf-8')
         flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
         logfile=Path(folder)/'core.log';stream=logfile.open('wb')
