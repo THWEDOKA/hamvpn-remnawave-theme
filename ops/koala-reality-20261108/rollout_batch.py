@@ -36,7 +36,10 @@ def remote(client,code,data=None,bot=False,timeout=120):
     stdin,stdout,stderr=client.exec_command(python+' -c '+shlex.quote(code),timeout=timeout)
     if data is not None:stdin.write(json.dumps(data));stdin.flush();stdin.channel.shutdown_write()
     output=stdout.read().decode(errors='replace');error=stderr.read();rc=stdout.channel.recv_exit_status()
-    if rc:raise RuntimeError('Remote verification failed; no private stderr printed')
+    if rc:
+        last=error.decode(errors='replace').splitlines()[-1:]
+        category=next((v for v in ['Profile propagation timeout','Profile drift','Fresh preflight required','Original image tag changed','Existing operation requires review','Unexpected inbound changes'] if any(v in line for line in last)),'private remote operation')
+        raise RuntimeError('Remote verification failed: '+category)
     return output
 
 

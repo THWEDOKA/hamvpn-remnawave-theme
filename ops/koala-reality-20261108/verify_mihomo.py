@@ -36,6 +36,9 @@ def main():
         cfg={'mixed-port':mixed,'external-controller':f'127.0.0.1:{controller}',
              'secret':secret,'allow-lan':False,'bind-address':'127.0.0.1','mode':'rule',
              'ipv6':False,'tun':{'enable':False},'log-level':'silent',
+             'dns':{'enable':True,'ipv6':False,'enhanced-mode':'redir-host',
+                    'nameserver':['https://1.1.1.1/dns-query'],'default-nameserver':['1.1.1.1'],
+                    'proxy-server-nameserver':['https://1.1.1.1/dns-query']},
              'proxies':[proxy],'rules':['MATCH,POLAND_CHECK']}
         path=Path(folder)/'config.json';path.write_text(json.dumps(cfg),encoding='utf-8')
         flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
