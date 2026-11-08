@@ -25,6 +25,7 @@ XRAY_SHA='8195d909f1109b8f3d99eefe401a3c451d7bf4af71f24d3815420f77e5dd2a40'
 MIHOMO_URL='https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz'
 MIHOMO_SHA='386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'
 TAG='plreg-raw'
+EXPECTED_IP='150.251.112.172'
 
 
 def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -131,7 +132,7 @@ def prepare(reference):
     try:
         time.sleep(1);no_mptcp()
         proxy=deepcopy(reference);proxy['name']='OLD_CORE_CANARY';proxy['server']='127.0.0.1';proxy['port']=inbound['port'];proxy['client-fingerprint']='firefox'
-        proof=probe_mihomo(proxy,STATE/'mihomo',expected='150.251.112.172')
+        proof=probe_mihomo(proxy,STATE/'mihomo',expected=EXPECTED_IP)
     finally:run(['docker','rm','-f',name])
     manifest={'image':current,'image_ref':container['Config']['Image'],'compose_sha':digest(before),'core_sha':digest(STATE/'xray'),'prepared_at':int(time.time()),'proof':proof,'godebug_before':next((v.split('=',1)[1] for v in container['Config'].get('Env',[]) if v.startswith('GODEBUG=')),'')}
     (STATE/'manifest.json').write_text(json.dumps(manifest))

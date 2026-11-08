@@ -14,6 +14,7 @@ NODE='99de873c-0819-4e33-b2bd-fd0e76432948'
 HOST='48623028-3e31-405e-b613-fc3f28d96ed4'
 STATE=Path('/root/ham-koala-profile-rollback-20261108')
 UNIT='ham-koala-profile-rollback-20261108'
+TAG='plreg-raw'
 
 
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -21,7 +22,7 @@ def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separato
 
 def candidate(config):
     result=deepcopy(config)
-    found=[i for i in result['inbounds'] if i.get('tag')=='plreg-raw']
+    found=[i for i in result['inbounds'] if i.get('tag')==TAG]
     if len(found)!=1 or found[0].get('port')!=443 or found[0].get('protocol')!='vless':raise ValueError('Wrong inbound')
     stream=found[0].get('streamSettings',{})
     if stream.get('security')!='reality':raise ValueError('REALITY required')
