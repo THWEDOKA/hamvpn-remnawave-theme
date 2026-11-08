@@ -61,6 +61,9 @@ def main():
             print('ROLLOUT_BEGIN',ip,flush=True)
             try:
                 client=node_client(bot,next(x for x in payload['access'] if x['ip']==ip))
+                if payload.get('retry'):
+                    remote(client,"import subprocess;subprocess.run(['systemctl','stop','ham-koala-batch-core-20261108.timer','ham-koala-batch-core-20261108.service'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)")
+                    remote(bot,"import subprocess;subprocess.run(['systemctl','stop',"+repr('ham-koala-batch-profile-'+policy['node']+'.timer')+","+repr('ham-koala-batch-profile-'+policy['node']+'.service')+"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",bot=True)
                 profile(bot,policy,'apply');profile_changed=True
                 remote(client,"import time,sys;sys.path.insert(0,'/root/ham-koala-batch-release-20261108');import core_rollback as c;\nfor _ in range(40):\n cfg,_=c.runtime();i=next(x for x in cfg['inbounds'] if x.get('tag')=="+repr(policy['tag'])+")\n if i['streamSettings']['realitySettings'].get('minClientVer')=='1.8.2':break\n time.sleep(1)\nelse:raise RuntimeError('Profile propagation timeout')")
                 before=remote(client,"import subprocess,json;d=json.loads(subprocess.check_output(['docker','ps','-q']).decode() and subprocess.check_output(['docker','inspect',*subprocess.check_output(['docker','ps','-q']).decode().split()]));print(json.dumps({x['Name']:x['State']['StartedAt'] for x in d if x['Name']!='/remnanode'}))")
