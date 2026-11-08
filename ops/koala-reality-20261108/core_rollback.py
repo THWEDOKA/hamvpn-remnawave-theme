@@ -117,7 +117,9 @@ def prepare(reference):
     (STATE/'mihomo').chmod(0o700)
     base=['docker','run','--rm','--network','none','-e','GODEBUG=multipathtcp=0','--mount',f'type=bind,src={STATE},dst=/work,readonly','--entrypoint','/work/xray']
     if VERSION not in run(base+[current,'version']).decode():raise ValueError('Unexpected artifact version')
-    run(base[:2]+['-i']+base[2:]+[current,'run','-test','-config','stdin:'],data=json.dumps(updated).encode())
+    validation=deepcopy(updated)
+    validation['log']={'loglevel':'none','access':'none','error':'none'}
+    run(base[:2]+['-i']+base[2:]+[current,'run','-test','-config','stdin:'],data=json.dumps(validation).encode())
     no_mptcp()
     inbound=deepcopy(target(updated));inbound['listen']='127.0.0.1';inbound['port']=free_port()
     matches=[u for u in inbound['settings']['clients'] if u.get('id')==reference['uuid']]
