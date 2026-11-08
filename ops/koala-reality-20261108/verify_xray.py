@@ -30,7 +30,13 @@ def main():
             command=['docker','run','--rm','--name',name,'--network','host','-e','GODEBUG=multipathtcp=0','--mount',f'type=bind,src={folder},dst=/work,readonly','--entrypoint',args.binary,args.docker_image,'run','-config','/work/config.json']
         process=subprocess.Popen(command,env=dict(os.environ,GODEBUG='multipathtcp=0'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
-            time.sleep(1)
+            for _ in range(200):
+                if process.poll() is not None:raise RuntimeError('Isolated Xray client exited before listener readiness')
+                try:
+                    with socket.create_connection(('127.0.0.1',port),timeout=.2):break
+                except OSError:time.sleep(.2)
+            else:raise RuntimeError('Isolated Xray client listener startup timeout')
+            print('XRAY_CLIENT_LISTENER_READY',flush=True)
             for url in [args.web_test_url,'https://api.ipify.org','https://www.cloudflare.com/cdn-cgi/trace']:
                 r=subprocess.run(['curl','--disable','--silent','--noproxy','','--proxy',f'socks5h://127.0.0.1:{port}','--max-time','20','--write-out','\n%{http_code}',url],capture_output=True,timeout=25)
                 body,_,status=r.stdout.rpartition(b'\n')
