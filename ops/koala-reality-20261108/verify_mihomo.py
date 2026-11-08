@@ -24,9 +24,10 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('subscription');parser.add_argument('core')
     parser.add_argument('--expected',default='150.251.112.172')
+    parser.add_argument('--name',default='🇵🇱 Польша')
     args=parser.parse_args()
     source=yaml.safe_load(Path(args.subscription).read_text(encoding='utf-8'))
-    original=next(p for p in source['proxies'] if p['name']=='🇵🇱 Польша')
+    original=next(p for p in source['proxies'] if p['name']==args.name)
     proxy=deepcopy(original)
     if proxy.get('client-fingerprint')!='firefox':raise ValueError('Unexpected client fingerprint')
     proxy['name']='POLAND_CHECK'
