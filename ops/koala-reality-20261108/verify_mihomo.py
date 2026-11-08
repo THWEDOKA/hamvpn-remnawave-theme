@@ -36,14 +36,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='koala-rollback-verify-') as folder:
         cfg={'mixed-port':mixed,'external-controller':f'127.0.0.1:{controller}',
              'secret':secret,'allow-lan':False,'bind-address':'127.0.0.1','mode':'rule',
-             'ipv6':False,'tun':{'enable':False},'log-level':'silent',
+             'ipv6':False,'tun':{'enable':False},'log-level':'debug',
              'dns':{'enable':True,'ipv6':False,'enhanced-mode':'redir-host',
                     'nameserver':['https://1.1.1.1/dns-query'],'default-nameserver':['1.1.1.1'],
                     'proxy-server-nameserver':['https://1.1.1.1/dns-query']},
              'proxies':[proxy],'rules':['MATCH,POLAND_CHECK']}
         path=Path(folder)/'config.json';path.write_text(json.dumps(cfg),encoding='utf-8')
         flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
-        process=subprocess.Popen([args.core,'-d',folder,'-f',str(path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=flags)
+        logfile=Path(folder)/'core.log';stream=logfile.open('wb')
+        process=subprocess.Popen([args.core,'-d',folder,'-f',str(path)],stdout=stream,stderr=subprocess.STDOUT,creationflags=flags)
         try:
             with httpx.Client(base_url=f'http://127.0.0.1:{controller}',headers={'Authorization':'Bearer '+secret},timeout=25,trust_env=False) as client:
                 for _ in range(200):
@@ -60,6 +61,8 @@ def main():
                     if response.status_code!=200:
                         detail=response.text[:500]
                         print('URL_TEST_ERROR',response.status_code,re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',detail),flush=True)
+                        lines=[line for line in logfile.read_text(errors='replace').splitlines() if any(w in line.lower() for w in ['failed','error','refused','[tcp]']) and 'authentication:' not in line.lower()]
+                        for line in lines[-3:]:print('CLIENT_DIAGNOSTIC',re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',line),flush=True)
                         raise RuntimeError('URL test failed')
                     print('URL_TEST',index+1,response.json()['delay'],flush=True)
             curl='curl.exe' if flags else 'curl'
@@ -74,6 +77,7 @@ def main():
             process.terminate()
             try:process.wait(timeout=5)
             except subprocess.TimeoutExpired:process.kill();process.wait()
+            stream.close()
 
 
 if __name__=='__main__':main()
