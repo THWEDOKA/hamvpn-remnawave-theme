@@ -2,6 +2,7 @@
 import argparse
 from copy import deepcopy
 import json
+import re
 from pathlib import Path
 import secrets
 import socket
@@ -56,7 +57,10 @@ def main():
                 print('CORE',client.get('/version').json(),flush=True)
                 for index in range(3):
                     response=client.get('/proxies/'+quote('POLAND_CHECK')+'/delay',params={'timeout':15000,'url':'https://www.gstatic.com/generate_204'})
-                    if response.status_code!=200:raise RuntimeError('URL test failed')
+                    if response.status_code!=200:
+                        detail=response.text[:500]
+                        print('URL_TEST_ERROR',response.status_code,re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',detail),flush=True)
+                        raise RuntimeError('URL test failed')
                     print('URL_TEST',index+1,response.json()['delay'],flush=True)
             curl='curl.exe' if flags else 'curl'
             for url in ['https://www.gstatic.com/generate_204']*3+['https://api.ipify.org','https://www.cloudflare.com/cdn-cgi/trace']:
