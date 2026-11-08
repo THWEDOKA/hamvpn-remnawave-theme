@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--expected',default='150.251.112.172')
     parser.add_argument('--name',default='🇵🇱 Польша')
     parser.add_argument('--interface',help='Optional physical interface for an isolated probe alongside an active VPN')
+    parser.add_argument('--test-url',default='https://www.gstatic.com/generate_204')
     args=parser.parse_args()
     source=yaml.safe_load(Path(args.subscription).read_text(encoding='utf-8'))
     original=next(p for p in source['proxies'] if p['name']==args.name)
@@ -59,7 +60,7 @@ def main():
                 else:raise RuntimeError('Client configuration not ready')
                 print('CORE',client.get('/version').json(),flush=True)
                 for index in range(3):
-                    response=client.get('/proxies/'+quote('POLAND_CHECK')+'/delay',params={'timeout':15000,'url':'https://www.gstatic.com/generate_204'})
+                    response=client.get('/proxies/'+quote('POLAND_CHECK')+'/delay',params={'timeout':15000,'url':args.test_url})
                     if response.status_code!=200:
                         detail=response.text[:500]
                         print('URL_TEST_ERROR',response.status_code,re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',detail),flush=True)
