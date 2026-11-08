@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--name',default='🇵🇱 Польша')
     parser.add_argument('--interface',help='Optional physical interface for an isolated probe alongside an active VPN')
     parser.add_argument('--test-url',default='https://www.gstatic.com/generate_204')
+    parser.add_argument('--web-test-url',default='https://www.gstatic.com/generate_204')
     args=parser.parse_args()
     source=yaml.safe_load(Path(args.subscription).read_text(encoding='utf-8'))
     original=next(p for p in source['proxies'] if p['name']==args.name)
@@ -69,11 +70,12 @@ def main():
                         raise RuntimeError('URL test failed')
                     print('URL_TEST',index+1,response.json()['delay'],flush=True)
             curl='curl.exe' if flags else 'curl'
-            for url in ['https://www.gstatic.com/generate_204']*3+['https://api.ipify.org','https://www.cloudflare.com/cdn-cgi/trace']:
-                result=subprocess.run([curl,'--disable','--silent','--noproxy','','--proxy',f'http://127.0.0.1:{mixed}','--max-time','20','--write-out','\n%{http_code}',url],capture_output=True,timeout=25)
+            for url in [args.web_test_url]*3+['https://api.ipify.org','https://www.cloudflare.com/cdn-cgi/trace']:
+                result=subprocess.run([curl,'--disable','--silent','--show-error','--noproxy','','--proxy',f'http://127.0.0.1:{mixed}','--max-time','20','--write-out','\n%{http_code}',url],capture_output=True,timeout=25)
                 body,_,status=result.stdout.rpartition(b'\n')
-                good=status==b'204' if 'gstatic' in url else status==b'200' and (body.strip()==args.expected.encode() if 'ipify' in url else b'ip=' in body)
+                good=status==b'204' if 'gstatic' in url else status==b'200' and (body.strip()==args.expected.encode() if 'ipify' in url else b'ip=' in body if 'cdn-cgi/trace' in url else True)
                 if result.returncode or not good:
+                    print('HTTPS_FAILURE',{'check':'gstatic' if 'gstatic' in url else 'ipify' if 'ipify' in url else 'cloudflare','curl':result.returncode,'status':status.decode(errors='replace'),'error':re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',result.stderr.decode(errors='replace')[:400])},flush=True)
                     if 'ipify' in url and re.fullmatch(rb'[0-9.]{7,15}',body.strip()):print('OBSERVED_EGRESS',body.decode().strip(),flush=True)
                     raise RuntimeError('HTTPS or exit IP verification failed')
                 print('HTTPS_OK','egress='+args.expected if 'ipify' in url else status.decode(),flush=True)
