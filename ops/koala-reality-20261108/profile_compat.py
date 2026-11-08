@@ -15,6 +15,8 @@ HOST='48623028-3e31-405e-b613-fc3f28d96ed4'
 STATE=Path('/root/ham-koala-profile-rollback-20261108')
 UNIT='ham-koala-profile-rollback-20261108'
 TAG='plreg-raw'
+NODES=None
+HOSTS=None
 
 
 def digest(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -44,9 +46,9 @@ def main(action):
     if action=='prepare':
         if STATE.exists():raise ValueError('Existing operation must be reviewed')
         nodes=api('GET','nodes');nodes=nodes.get('nodes',nodes) if isinstance(nodes,dict) else nodes
-        if [n['uuid'] for n in nodes if n.get('configProfile',{}).get('activeConfigProfileUuid')==PROFILE]!=[NODE]:raise ValueError('Shared profile is outside scope')
+        if sorted(n['uuid'] for n in nodes if n.get('configProfile',{}).get('activeConfigProfileUuid')==PROFILE)!=sorted(NODES or [NODE]):raise ValueError('Shared profile is outside scope')
         hosts=api('GET','hosts');hosts=hosts.get('hosts',hosts) if isinstance(hosts,dict) else hosts
-        if [h['uuid'] for h in hosts if h.get('inbound',{}).get('configProfileUuid')==PROFILE]!=[HOST]:raise ValueError('Unexpected host consumers')
+        if sorted(h['uuid'] for h in hosts if h.get('inbound',{}).get('configProfileUuid')==PROFILE)!=sorted(HOSTS or [HOST]):raise ValueError('Unexpected host consumers')
         before=profile();cfg=before['config'];cfg=json.loads(cfg) if isinstance(cfg,str) else cfg
         after=candidate(cfg);STATE.mkdir(mode=0o700)
         (STATE/'profile.json').write_text(json.dumps({'before':cfg,'after':after,'before_sha':digest(cfg),'after_sha':digest(after)}))
@@ -65,7 +67,7 @@ def main(action):
         api('PATCH','config-profiles',{'uuid':PROFILE,'config':saved['before']});print('ORIGINAL_PROFILE_RESTORED')
     else:
         if digest(now)!=saved['after_sha']:raise ValueError('Profile drift')
-        if not api('GET','nodes/'+NODE).get('isConnected'):raise ValueError('Node disconnected')
+        if not all(api('GET','nodes/'+n).get('isConnected') for n in (NODES or [NODE])):raise ValueError('Node disconnected')
         timer('stop',UNIT+'.timer');print('CANONICAL_PROFILE_ACCEPTED')
 
 

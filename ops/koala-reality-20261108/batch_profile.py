@@ -12,6 +12,7 @@ if __name__=='__main__':
     spec=importlib.util.spec_from_file_location('profile',RELEASE/'profile_compat.py')
     profile=importlib.util.module_from_spec(spec);spec.loader.exec_module(profile)
     profile.NODE=policy['node'];profile.PROFILE=policy['profile'];profile.HOST=policy['host'];profile.TAG=policy['tag']
+    profile.NODES=policy.get('nodes');profile.HOSTS=policy.get('hosts')
     profile.STATE=Path('/root/ham-koala-batch-profile-'+node)
     profile.UNIT='ham-koala-batch-profile-'+node
     profile.__file__=__file__
