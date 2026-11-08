@@ -61,7 +61,7 @@ def main():
                     if response.status_code!=200:
                         detail=response.text[:500]
                         print('URL_TEST_ERROR',response.status_code,re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',detail),flush=True)
-                        lines=[line for line in logfile.read_text(errors='replace').splitlines() if any(w in line.lower() for w in ['failed','error','refused','[tcp]']) and 'authentication:' not in line.lower()]
+                        lines=[line for line in logfile.read_text(errors='replace').splitlines() if 'authentication:' not in line.lower()]
                         for line in lines[-3:]:print('CLIENT_DIAGNOSTIC',re.sub(r'[A-Za-z0-9_+/=-]{24,}','[redacted]',line),flush=True)
                         raise RuntimeError('URL test failed')
                     print('URL_TEST',index+1,response.json()['delay'],flush=True)
@@ -70,7 +70,9 @@ def main():
                 result=subprocess.run([curl,'--disable','--silent','--noproxy','','--proxy',f'http://127.0.0.1:{mixed}','--max-time','20','--write-out','\n%{http_code}',url],capture_output=True,timeout=25)
                 body,_,status=result.stdout.rpartition(b'\n')
                 good=status==b'204' if 'gstatic' in url else status==b'200' and (body.strip()==args.expected.encode() if 'ipify' in url else b'ip=' in body)
-                if result.returncode or not good:raise RuntimeError('HTTPS or exit IP verification failed')
+                if result.returncode or not good:
+                    if 'ipify' in url and re.fullmatch(rb'[0-9.]{7,15}',body.strip()):print('OBSERVED_EGRESS',body.decode().strip(),flush=True)
+                    raise RuntimeError('HTTPS or exit IP verification failed')
                 print('HTTPS_OK','egress='+args.expected if 'ipify' in url else status.decode(),flush=True)
             print('FIREFOX_FULL_CLIENT_PROOF_PASSED',flush=True)
         finally:
